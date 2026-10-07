@@ -25,6 +25,8 @@ const allowlist = [
   "stripe",
   "uuid",
   "ws",
+  "ssh2",
+  "socks",
   "xlsx",
   "zod",
   "zod-validation-error",
