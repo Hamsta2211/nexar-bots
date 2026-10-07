@@ -1,0 +1,16 @@
+# Alternative ohne Docker: sudo cp nexar-bots.service /etc/systemd/system/ && sudo systemctl enable --now nexar-bots
+[Unit]
+Description=Nexar Bots
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/nexar-bots
+Environment=NODE_ENV=production PORT=5000
+EnvironmentFile=/opt/nexar-bots/.env
+ExecStart=/usr/bin/node dist/index.cjs
+Restart=always
+RestartSec=5
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target

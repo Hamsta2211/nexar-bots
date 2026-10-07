@@ -1,0 +1,24 @@
+services:
+  nexar:
+    build: .
+    container_name: nexar-bots
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"   # nur lokal; von außen über Caddy (HTTPS) erreichbar
+    env_file: .env              # DATABASE_URL (Supabase) und APP_SECRET
+    environment:
+      TZ: Europe/Vienna
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-data:/data
+    depends_on: [nexar]
+
+volumes:
+  caddy-data:

@@ -1,0 +1,4 @@
+# Ersetze die Domain durch deine eigene (A-Record auf die VM-IP)
+bots.example.com {
+  reverse_proxy nexar:5000
+}
