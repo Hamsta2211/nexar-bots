@@ -1,7 +1,24 @@
 import ssh2 from "ssh2";
 const { Client, utils: sshUtils } = ssh2;
 import { createHash } from "node:crypto";
+import { Socket } from "node:net";
 import { storage } from "./storage";
+
+/** Optional SOCKS5 (Tailscale userspace: ALL_PROXY=socks5h://127.0.0.1:1055) */
+async function createSocksSocket(host: string, port: number): Promise<Socket> {
+  const proxy = process.env.ALL_PROXY || process.env.SOCKS5_PROXY || process.env.TAILSCALE_SOCKS || "";
+  const m = proxy.match(/socks5h?:\/\/([^:]+):(\d+)/i);
+  if (!m) throw new Error("no socks");
+  const proxyHost = m[1];
+  const proxyPort = parseInt(m[2], 10);
+  const { SocksClient } = await import("socks");
+  const info = await SocksClient.createConnection({
+    proxy: { host: proxyHost, port: proxyPort, type: 5 },
+    command: "connect",
+    destination: { host, port },
+  });
+  return info.socket as unknown as Socket;
+}
 
 export type SshConfig = {
   host: string;
@@ -30,7 +47,6 @@ export function saveSshConfig(patch: Partial<SshConfig>) {
   const cur = getSshConfig();
   const next = { ...cur };
   for (const [k, v] of Object.entries(patch)) {
-    // leere Geheimnisse = unverändert lassen
     if (["privateKey", "passphrase", "password"].includes(k) && v === "") continue;
     (next as any)[k] = v;
   }
@@ -95,41 +111,54 @@ export function sshExec(command: string, opts: { timeoutMs?: number; bypassSafe?
     };
     const timer = setTimeout(() => finish(new Error(`Zeitüberschreitung nach ${timeoutMs / 1000}s`)), timeoutMs);
 
-    conn
-      .on("ready", () => {
-        conn.exec(command, (err, stream) => {
-          if (err) return finish(err);
-          stream
-            .on("close", (code: number) => finish(null, code ?? null))
-            .on("data", (d: Buffer) => { stdout += d.toString(); if (stdout.length > 200_000) stdout = stdout.slice(-200_000); })
-            .stderr.on("data", (d: Buffer) => { stderr += d.toString(); if (stderr.length > 50_000) stderr = stderr.slice(-50_000); });
-        });
-      })
-      .on("error", (e) => finish(new Error(`SSH-Fehler: ${e.message}`)))
-      .connect({
-        host: c.host,
-        port: c.port || 22,
-        username: c.username,
-        readyTimeout: 15_000,
-        keepaliveInterval: 10_000,
-        ...(c.authType === "key"
-          ? { privateKey: c.privateKey, passphrase: c.passphrase || undefined }
-          : { password: c.password }),
-        // Trust-on-first-use: Fingerabdruck beim ersten Verbinden merken, danach prüfen
-        hostVerifier: (key: Buffer) => {
-          const fp = "SHA256:" + createHash("sha256").update(key).digest("base64").replace(/=+$/, "");
-          const known = storage.getSetting("ssh_hostkey");
-          if (!known) {
-            storage.setSetting("ssh_hostkey", fp);
-            return true;
-          }
-          if (known !== fp) {
-            setTimeout(() => finish(new Error(`Host-Key hat sich geändert (erwartet ${known}, erhalten ${fp}). Falls du den PC neu aufgesetzt hast, setze den Fingerabdruck unter "Mein PC" zurück.`)), 0);
-            return false;
-          }
+    const baseOpts: any = {
+      host: c.host,
+      port: c.port || 22,
+      username: c.username,
+      readyTimeout: 15_000,
+      keepaliveInterval: 10_000,
+      ...(c.authType === "key"
+        ? { privateKey: c.privateKey, passphrase: c.passphrase || undefined }
+        : { password: c.password }),
+      hostVerifier: (key: Buffer) => {
+        const fp = "SHA256:" + createHash("sha256").update(key).digest("base64").replace(/=+$/, "");
+        const known = storage.getSetting("ssh_hostkey");
+        if (!known) {
+          storage.setSetting("ssh_hostkey", fp);
           return true;
-        },
-      } as any);
+        }
+        if (known !== fp) {
+          setTimeout(() => finish(new Error(`Host-Key hat sich geändert (erwartet ${known}, erhalten ${fp}). Falls du den PC neu aufgesetzt hast, setze den Fingerabdruck unter "Mein PC" zurück.`)), 0);
+          return false;
+        }
+        return true;
+      },
+    };
+
+    const start = async () => {
+      try {
+        if (process.env.ALL_PROXY || process.env.SOCKS5_PROXY || process.env.TAILSCALE_SOCKS) {
+          baseOpts.sock = await createSocksSocket(c.host, c.port || 22);
+        }
+      } catch (e: any) {
+        if (!String(e?.message || e).includes("no socks")) {
+          console.warn("[ssh] SOCKS proxy skip:", e?.message || e);
+        }
+      }
+      conn
+        .on("ready", () => {
+          conn.exec(command, (err, stream) => {
+            if (err) return finish(err);
+            stream
+              .on("close", (code: number) => finish(null, code ?? null))
+              .on("data", (d: Buffer) => { stdout += d.toString(); if (stdout.length > 200_000) stdout = stdout.slice(-200_000); })
+              .stderr.on("data", (d: Buffer) => { stderr += d.toString(); if (stderr.length > 50_000) stderr = stderr.slice(-50_000); });
+          });
+        })
+        .on("error", (e) => finish(new Error(`SSH-Fehler: ${e.message}`)))
+        .connect(baseOpts);
+    };
+    start().catch((e) => finish(e instanceof Error ? e : new Error(String(e))));
   });
 }
 
@@ -157,7 +186,6 @@ export async function systemInfo() {
 export function generateKey() {
   const k = sshUtils.generateKeyPairSync("ed25519", { comment: "nexar-bots" });
   saveSshConfig({ authType: "key", privateKey: k.private, passphrase: "" });
-  // Passphrase explizit leeren (saveSshConfig ignoriert leere Geheimnisse)
   const cur = getSshConfig();
   storage.setSetting("ssh_config", JSON.stringify({ ...cur, passphrase: "" }));
   storage.setSetting("ssh_pubkey", k.public);
