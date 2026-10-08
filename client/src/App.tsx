@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Switch, Route, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
@@ -7,31 +8,38 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-shell";
 import { AuthProvider } from "@/components/auth";
-import Security from "@/pages/security";
 import { ThemeProvider } from "@/components/theme";
 import NotFound from "@/pages/not-found";
-import Dashboard from "@/pages/dashboard";
-import Bots from "@/pages/bots";
-import Chat from "@/pages/chat";
-import Tasks from "@/pages/tasks";
-import Settings from "@/pages/settings";
-import Hosting from "@/pages/hosting";
-import MyPc from "@/pages/pc";
+
+// Seiten werden erst bei Bedarf geladen: schnellerer Start, flüssigeres Gefühl
+const Dashboard = lazy(() => import("@/pages/dashboard"));
+const Bots = lazy(() => import("@/pages/bots"));
+const Chat = lazy(() => import("@/pages/chat"));
+const Voice = lazy(() => import("@/pages/voice"));
+const Tasks = lazy(() => import("@/pages/tasks"));
+const Settings = lazy(() => import("@/pages/settings"));
+const Hosting = lazy(() => import("@/pages/hosting"));
+const MyPc = lazy(() => import("@/pages/pc"));
+const Security = lazy(() => import("@/pages/security"));
 
 function AppRouter() {
   return (
-    <Switch>
-      <Route path="/" component={Dashboard} />
-      <Route path="/bots" component={Bots} />
-      <Route path="/chat" component={Chat} />
-      <Route path="/chat/:id" component={Chat} />
-      <Route path="/tasks" component={Tasks} />
-      <Route path="/settings" component={Settings} />
-      <Route path="/hosting" component={Hosting} />
-      <Route path="/pc" component={MyPc} />
-      <Route path="/security" component={Security} />
-      <Route component={NotFound} />
-    </Switch>
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Lädt …</div>}>
+      <Switch>
+        <Route path="/" component={Dashboard} />
+        <Route path="/bots" component={Bots} />
+        <Route path="/chat" component={Chat} />
+        <Route path="/chat/:id" component={Chat} />
+        <Route path="/voice" component={Voice} />
+        <Route path="/voice/:id" component={Voice} />
+        <Route path="/tasks" component={Tasks} />
+        <Route path="/settings" component={Settings} />
+        <Route path="/hosting" component={Hosting} />
+        <Route path="/pc" component={MyPc} />
+        <Route path="/security" component={Security} />
+        <Route component={NotFound} />
+      </Switch>
+    </Suspense>
   );
 }
 

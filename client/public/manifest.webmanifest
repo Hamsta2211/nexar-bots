@@ -1,0 +1,22 @@
+{
+  "name": "Nexar Bots",
+  "short_name": "Nexar",
+  "description": "KI-Agenten mit Streaming, Sprachchat und Automationen",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "lang": "de",
+  "background_color": "#121821",
+  "theme_color": "#121821",
+  "icons": [
+    { "src": "/pwa-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/pwa-icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Gruppen-Voice-Chat", "short_name": "Voice", "url": "/#/voice" },
+    { "name": "Chat", "short_name": "Chat", "url": "/#/chat" }
+  ]
+}

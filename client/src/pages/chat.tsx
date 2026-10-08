@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useParams, Link } from "wouter";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, ChevronRight, Loader2, Plus, Trash2, Wrench, Copy, Square, Repeat } from "lucide-react";
+import { ArrowUp, ChevronRight, Loader2, Mic, Plus, Trash2, Wrench, Copy, Square, Repeat } from "lucide-react";
 import type { Bot, Conversation, Message, ToolStep } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { streamChat } from "@/lib/stream";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -49,7 +50,7 @@ function Steps({ steps }: { steps: ToolStep[] }) {
   );
 }
 
-function Bubble({ m, bot }: { m: Pick<Message, "role" | "content" | "steps">; bot: Bot }) {
+const Bubble = memo(function Bubble({ m, bot }: { m: Pick<Message, "role" | "content" | "steps">; bot: Bot }) {
   const { toast } = useToast();
   if (m.role === "user") {
     return (
@@ -78,17 +79,23 @@ function Bubble({ m, bot }: { m: Pick<Message, "role" | "content" | "steps">; bo
       </div>
     </div>
   );
-}
+});
 
 export default function Chat() {
   const params = useParams<{ id?: string }>();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
   const { data: bots, isLoading: botsLoading } = useQuery<Bot[]>({ queryKey: ["/api/bots"] });
   const botId = params.id ? Number(params.id) : bots?.[0]?.id;
   const bot = bots?.find((b) => b.id === botId);
   const [convId, setConvId] = useState<number | null>(null);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [stream, setStream] = useState<{ text: string; events: string[] } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const botRef = useRef<number | undefined>(botId);
+  botRef.current = botId;
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -99,19 +106,48 @@ export default function Chat() {
   const { data: convs } = useQuery<Conversation[]>({ queryKey: ["/api/bots", botId ?? 0, "conversations"], enabled: !!botId });
   const { data: msgs, isLoading: msgsLoading } = useQuery<Message[]>({ queryKey: ["/api/conversations", convId ?? 0, "messages"], enabled: !!convId });
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: sending ? "auto" : "smooth" });
+  }, [msgs, pending, stream?.text, stream?.events.length]);
 
-  const send = useMutation({
-    mutationFn: async (text: string) => (await apiRequest("POST", `/api/bots/${botId}/chat`, { message: text, conversationId: convId })).json(),
-    onMutate: (text) => { setPending(text); setInput(""); },
-    onSuccess: async (d: { conversationId: number }) => {
-      setConvId(d.conversationId);
-      await queryClient.invalidateQueries({ queryKey: ["/api/conversations", d.conversationId, "messages"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/bots", botId ?? 0, "conversations"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-    },
-    onSettled: () => setPending(null),
-  });
+  // Antwort live (Wort für Wort) vom Server empfangen
+  const run = async (text: string) => {
+    if (!botId || sending) return;
+    const myBot = botId;
+    setPending(text);
+    setInput("");
+    setSending(true);
+    setStream({ text: "", events: [] });
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    let cid: number | null = convId;
+    let buf = "";
+    let timer: any = 0;
+    const flush = () => { timer = 0; setStream((s) => (s ? { ...s, text: buf } : s)); };
+    try {
+      await streamChat(myBot, { message: text, conversationId: convId }, {
+        onStart: (id) => { cid = id; },
+        onToken: (t) => { buf += t; if (!timer) timer = setTimeout(flush, 50); },
+        onReset: () => { buf = ""; if (timer) { clearTimeout(timer); timer = 0; } setStream((s) => (s ? { ...s, text: "" } : s)); },
+        onEvent: (e) => setStream((s) => (s ? { ...s, events: [...s.events.filter((x) => x !== e), e].slice(-4) } : s)),
+      }, ctrl.signal);
+    } catch (e: any) {
+      if (!ctrl.signal.aborted) toast({ title: "Fehler", description: e?.message || String(e), variant: "destructive" });
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (cid) {
+        if (ctrl.signal.aborted) await new Promise((r) => setTimeout(r, 500));
+        try { await queryClient.fetchQuery({ queryKey: ["/api/conversations", cid, "messages"], staleTime: 0 }); } catch {}
+        if (botRef.current === myBot) setConvId(cid);
+        queryClient.invalidateQueries({ queryKey: ["/api/bots", myBot, "conversations"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
+      }
+      setStream(null);
+      setPending(null);
+      setSending(false);
+      if (abortRef.current === ctrl) abortRef.current = null;
+    }
+  };
 
   const delConv = useMutation({
     mutationFn: (id: number) => apiRequest("DELETE", `/api/conversations/${id}`),
@@ -123,7 +159,7 @@ export default function Chat() {
 
   const submit = () => {
     const t = input.trim();
-    if (t && !send.isPending) send.mutate(t);
+    if (t && !sending) void run(t);
   };
 
   if (botsLoading) return <div className="p-6"><Skeleton className="h-96 w-full" /></div>;
@@ -172,6 +208,9 @@ export default function Chat() {
             <div className="text-sm font-semibold" data-testid="text-chat-bot">{bot.name}</div>
             <ProviderBadge provider={bot.provider} model={bot.model} />
           </div>
+          <Link href={`/voice/${bot.id}`}>
+            <Button variant="outline" size="sm" data-testid="button-voice"><Mic className="mr-1.5 h-4 w-4" />Voice</Button>
+          </Link>
           <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setConvId(null)}><Plus className="h-4 w-4" /></Button>
         </div>
 
@@ -184,7 +223,7 @@ export default function Chat() {
                 <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{bot.description}</p>
                 <div className="mx-auto mt-5 grid max-w-lg gap-2 sm:grid-cols-2">
                   {suggestions.map((s) => (
-                    <button key={s} onClick={() => send.mutate(s)} className="rounded-md border border-border px-3 py-2 text-left text-sm text-muted-foreground hover-elevate" data-testid="button-suggestion">
+                    <button key={s} onClick={() => run(s)} className="rounded-md border border-border px-3 py-2 text-left text-sm text-muted-foreground hover-elevate" data-testid="button-suggestion">
                       {s}
                     </button>
                   ))}
@@ -196,11 +235,33 @@ export default function Chat() {
             {pending && (
               <>
                 {!shown.some((m) => m.content === pending && m.role === "user") && <Bubble m={{ role: "user", content: pending, steps: "[]" }} bot={bot} />}
-                <div className="flex items-center gap-3 text-sm text-muted-foreground" data-testid="status-thinking">
-                  <BotAvatar bot={bot} size="sm" />
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  {bot.name} denkt nach und nutzt Werkzeuge …
-                </div>
+                {stream && (
+                  <div className="flex gap-3" data-testid="status-thinking">
+                    <BotAvatar bot={bot} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      {stream.events.length > 0 && (
+                        <div className="mb-1.5 flex flex-wrap gap-1.5">
+                          {stream.events.map((e) => (
+                            <span key={e} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
+                              <Wrench className="h-2.5 w-2.5" />{e}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {stream.text ? (
+                        <div className="prose-chat text-sm">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
+                          <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary/70 align-middle" />
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          {bot.name} denkt nach …
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </>
             )}
             <div ref={endRef} />
@@ -218,8 +279,8 @@ export default function Chat() {
               className="max-h-40 min-h-[2.25rem] resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
               data-testid="input-chat"
             />
-            {send.isPending ? (
-              <Button size="icon" variant="outline" onClick={() => apiRequest("POST", `/api/bots/${botId}/stop`).catch(() => {})} aria-label="Stoppen" title="Agent stoppen" data-testid="button-stop">
+            {sending ? (
+              <Button size="icon" variant="outline" onClick={() => abortRef.current?.abort()} aria-label="Stoppen" title="Agent stoppen" data-testid="button-stop">
                 <Square className="h-3.5 w-3.5 fill-current" />
               </Button>
             ) : (

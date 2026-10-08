@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard, Bot as BotIcon, MessagesSquare, Timer, KeyRound, Server, Moon, Sun, Monitor, ShieldCheck, LogOut } from "lucide-react";
+import { LayoutDashboard, Bot as BotIcon, MessagesSquare, Mic, Timer, KeyRound, Server, Moon, Sun, Monitor, ShieldCheck, LogOut, Download } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu,
   SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
@@ -10,6 +10,8 @@ import { BotAvatar } from "@/lib/ui";
 import { useTheme } from "@/components/theme";
 import { useAuth } from "@/components/auth";
 import { NexarLogo } from "@/components/logo";
+import { useInstall } from "@/lib/pwa";
+import { useToast } from "@/hooks/use-toast";
 
 export { NexarLogo };
 
@@ -17,6 +19,7 @@ const NAV = [
   { href: "/", label: "Übersicht", icon: LayoutDashboard },
   { href: "/bots", label: "Bots", icon: BotIcon },
   { href: "/chat", label: "Chat", icon: MessagesSquare },
+  { href: "/voice", label: "Voice-Chat", icon: Mic },
   { href: "/tasks", label: "Automationen", icon: Timer },
   { href: "/pc", label: "Mein PC", icon: Monitor },
   { href: "/settings", label: "API-Keys", icon: KeyRound },
@@ -30,6 +33,8 @@ export function AppSidebar() {
   const { data: keys } = useQuery<KeyStatus>({ queryKey: ["/api/keys"] });
   const { theme, toggle } = useTheme();
   const { me, logout } = useAuth();
+  const { installed, canPrompt, ios, install } = useInstall();
+  const { toast } = useToast();
   const isActive = (href: string) => (href === "/" ? loc === "/" : loc.startsWith(href));
 
   return (
@@ -85,6 +90,16 @@ export function AppSidebar() {
           <KeyDot label="Groq" on={!!keys?.groq.set} />
           <KeyDot label="Google Gemini" on={!!keys?.google.set} />
         </div>
+        {!installed && (canPrompt || ios) && (
+          <button
+            onClick={() => (canPrompt ? install() : toast({ title: "Als App installieren", description: "Tippe in Safari auf Teilen und dann auf „Zum Home-Bildschirm“." }))}
+            className="flex items-center gap-2 rounded-md border border-sidebar-border px-3 py-2 text-xs hover-elevate"
+            data-testid="button-install-app"
+          >
+            <Download className="h-3.5 w-3.5" />
+            App installieren
+          </button>
+        )}
         <div className="flex items-center justify-between gap-2 px-1">
           <span className="truncate text-xs text-muted-foreground" data-testid="text-user-email">{me.email}</span>
           <button onClick={logout} className="rounded p-1.5 text-muted-foreground hover-elevate" aria-label="Abmelden" title="Abmelden" data-testid="button-logout">
