@@ -1,6 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+export const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 // Session-Token nur im Speicher (Fallback, falls Cookies blockiert sind, z.B. in eingebetteten Vorschauen).
 // Normalerweise authentifiziert das HttpOnly-Cookie, das 7 Tage auf dem Gerät gültig bleibt.
@@ -8,7 +8,7 @@ let sessionToken = "";
 export function setSessionToken(t: string) {
   sessionToken = t;
 }
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   return sessionToken ? { "x-nexar-session": sessionToken } : {};
 }
 let onUnauthorized: (() => void) | null = null;
