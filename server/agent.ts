@@ -49,6 +49,104 @@ async function rawFetch(provider: Provider, key: string, path: string, init: Req
   return JSON.parse(text);
 }
 
+/**
+ * Streaming-Variante von /chat/completions (Server-Sent Events). Gibt Textteile sofort an onToken weiter
+ * und liefert am Ende dasselbe Format wie die normale Antwort (inkl. gesammelter Werkzeugaufrufe).
+ */
+async function rawStream(
+  provider: Provider, key: string, body: any,
+  hooks: { onToken: (t: string) => void; onStart: () => void }, signal?: AbortSignal,
+) {
+  let res: Response;
+  try {
+    const timeout = AbortSignal.timeout(300_000);
+    res = await fetch(`${PROVIDER_BASE[provider]}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ ...body, stream: true, ...(provider === "groq" ? { stream_options: { include_usage: true } } : {}) }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+  } catch (e: any) {
+    if (signal?.aborted) throw new Error("Abgebrochen");
+    throw new ProviderError(`${provider}: Netzwerkfehler (${e?.cause?.message || e?.message || e})`, 0, 0, "network");
+  }
+  if (!res.ok || !res.body) {
+    const text = await res.text();
+    let msg = text;
+    try {
+      const j = JSON.parse(text);
+      msg = j?.error?.message || j?.[0]?.error?.message || text;
+    } catch {}
+    msg = String(msg).slice(0, 500);
+    throw new ProviderError(`${provider} ${res.status}: ${msg}`, res.status, parseRetryAfter(res, msg), classify(res.status, msg));
+  }
+  hooks.onStart();
+
+  let content = "";
+  let usage: any = null;
+  const calls: any[] = [];
+
+  const feed = (line: string) => {
+    line = line.trim();
+    if (!line.startsWith("data:")) return;
+    const d = line.slice(5).trim();
+    if (!d || d === "[DONE]") return;
+    let j: any;
+    try { j = JSON.parse(d); } catch { return; }
+    if (j?.error) {
+      const m = String(j.error?.message || JSON.stringify(j.error)).slice(0, 500);
+      throw new ProviderError(`${provider}: ${m}`, 0, 0, classify(0, m));
+    }
+    usage = j?.usage || j?.x_groq?.usage || usage;
+    const dl = j?.choices?.[0]?.delta;
+    if (!dl) return;
+    if (typeof dl.content === "string" && dl.content) {
+      content += dl.content;
+      hooks.onToken(dl.content);
+    }
+    for (const tc of dl.tool_calls || []) {
+      let idx = typeof tc.index === "number" ? tc.index : Math.max(0, calls.length - 1);
+      const ex = calls[idx];
+      // Manche Anbieter (Gemini) schicken mehrere Aufrufe alle mit index 0: neuer Name ohne gleiche id = neuer Aufruf
+      if (ex && tc.function?.name && ex.function.name && !(tc.id && tc.id === ex.id)) idx = calls.length;
+      const c = (calls[idx] ||= { id: "", type: "function", function: { name: "", arguments: "" } });
+      if (tc.id) c.id = tc.id;
+      if (tc.function?.name && !c.function.name) c.function.name = tc.function.name;
+      if (tc.function?.arguments) {
+        c.function.arguments += typeof tc.function.arguments === "string" ? tc.function.arguments : JSON.stringify(tc.function.arguments);
+      }
+      if (tc.extra_content) c.extra_content = tc.extra_content; // Gemini: thought_signature muss zurückgespielt werden
+    }
+  };
+
+  try {
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i: number;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        feed(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+      }
+    }
+    feed(buf);
+  } catch (e: any) {
+    if (e instanceof ProviderError) throw e;
+    if (signal?.aborted) throw new Error("Abgebrochen");
+    throw new ProviderError(`${provider}: Stream unterbrochen (${e?.cause?.message || e?.message || e})`, 0, 0, "network");
+  }
+
+  calls.forEach((c, i) => { if (!c.id) c.id = `call_${Date.now().toString(36)}_${i}`; if (!c.function.arguments) c.function.arguments = "{}"; });
+  return {
+    choices: [{ message: { role: "assistant", content: content || null, tool_calls: calls.length ? calls : undefined } }],
+    usage,
+  };
+}
+
 async function providerFetch(provider: Provider, path: string, init: RequestInit = {}, keyOverride?: string, opts: { signal?: AbortSignal; onSwitch?: (s: string) => void } = {}) {
   if (keyOverride) return rawFetch(provider, keyOverride, path, init, opts.signal);
   return withKey(provider, (key) => rawFetch(provider, key, path, init, opts.signal), opts);
@@ -240,6 +338,8 @@ export type RunOpts = {
   onCompact?: (summary: string, coveredHistory: number) => void; // wie viele History-Nachrichten jetzt in der Zusammenfassung stecken
   signal?: AbortSignal;
   onEvent?: (text: string) => void;
+  onToken?: (text: string) => void;                        // wenn gesetzt: Antwort wird live gestreamt
+  onStreamReset?: () => void;                              // neuer Streaming-Versuch (Zwischentext verwerfen)
 };
 
 /**
@@ -360,7 +460,12 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
       const body: any = { model: bot.model, messages: clean(msgs), temperature: bot.temperature };
       if (tools && !forceAnswer) { body.tools = tools; body.tool_choice = "auto"; }
       try {
-        data = await providerFetch(provider, "/chat/completions", { method: "POST", body: JSON.stringify(body) }, undefined, { signal: opts.signal, onSwitch: note });
+        if (opts.onToken) {
+          const hooks = { onToken: opts.onToken, onStart: () => opts.onStreamReset?.() };
+          data = await withKey(provider, (key) => rawStream(provider, key, body, hooks, opts.signal), { signal: opts.signal, onSwitch: note });
+        } else {
+          data = await providerFetch(provider, "/chat/completions", { method: "POST", body: JSON.stringify(body) }, undefined, { signal: opts.signal, onSwitch: note });
+        }
         break;
       } catch (e: any) {
         if (!(e instanceof ProviderError) || e.kind !== "context" || attempt >= 5) throw e;
