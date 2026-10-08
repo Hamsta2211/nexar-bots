@@ -1,6 +1,19 @@
 #!/bin/sh
 set -e
 
+# Microsoft-TTS (Python, edge-tts) lokal starten. Vor Tailscale, damit der Dienst keine Proxy-Variablen erbt.
+# Die Schleife startet ihn neu, falls er abstürzt.
+if [ -x /opt/tts-venv/bin/python ] && [ -f /app/tts/tts_server.py ]; then
+  (
+    while true; do
+      env -u ALL_PROXY -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+        /opt/tts-venv/bin/python /app/tts/tts_server.py >>/tmp/tts.log 2>&1 || true
+      sleep 2
+    done
+  ) &
+  echo "[entrypoint] TTS-Dienst (edge-tts) gestartet"
+fi
+
 # Start Tailscale in userspace mode if auth key is present
 if [ -n "$TAILSCALE_AUTHKEY" ]; then
   echo "[entrypoint] Starting Tailscale (userspace)..."

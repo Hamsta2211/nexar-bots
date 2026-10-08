@@ -20,9 +20,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
   && apt-get update && apt-get install -y --no-install-recommends tailscale \
   && rm -rf /var/lib/apt/lists/*
 
+# Python + edge-tts: Microsoft-Neural-Stimmen für die Sprachausgabe (läuft lokal im selben Container)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+  && rm -rf /var/lib/apt/lists/* \
+  && python3 -m venv /opt/tts-venv \
+  && /opt/tts-venv/bin/pip install --no-cache-dir edge-tts
+
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
+COPY server/tts /app/tts
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 

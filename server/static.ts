@@ -11,10 +11,19 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  app.use(
+    express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        // Gehashte Build-Dateien dürfen ewig gecacht werden (schnelleres Laden, auch offline als App)
+        if (/[\\/]assets[\\/]/.test(filePath)) res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        else if (/(sw\.js|index\.html|manifest\.webmanifest)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache");
+      },
+    }),
+  );
 
   // fall through to index.html if the file doesn't exist
   app.use("/{*path}", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }
