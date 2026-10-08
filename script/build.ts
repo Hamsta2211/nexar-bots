@@ -4,6 +4,8 @@ import { rm, readFile } from "node:fs/promises";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
+// NOTE: ssh2 is intentionally NOT listed here: it ships native .node
+// binaries (sshcrypto.node, cpu-features) that esbuild cannot bundle.
 const allowlist = [
   "@google/generative-ai",
   "axios",
@@ -25,7 +27,6 @@ const allowlist = [
   "stripe",
   "uuid",
   "ws",
-  "ssh2",
   "socks",
   "xlsx",
   "zod",
