@@ -41,7 +41,7 @@ export function takeSpeakable(buf: string, final: boolean, first: boolean): { ch
   return { chunk: buf.slice(0, cut), rest: buf.slice(cut) };
 }
 
-const fold = (s: string) => s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/ß/g, "ss");
+const fold = (s: string) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/ß/g, "ss");
 const letters = (s: string) => fold(s).replace(/[^a-z0-9]/g, "");
 
 function lev(a: string, b: string): number {
@@ -57,7 +57,7 @@ function lev(a: string, b: string): number {
  * Sucht den Namen eines Agenten im gesprochenen Text (tolerant gegenüber Erkennungsfehlern
  * bei längeren Namen). Gibt den Agenten und den Rest des Satzes ohne den Namen zurück.
  */
-export function findAgent(text: string, agents: { id: number; name: string }[]): { id: number; rest: string } | null {
+export function findAgent(text: string, agents: { id: number; name: string }[]): { id: number; rest: string; idx: number } | null {
   const words = text.split(/\s+/).filter(Boolean);
   const clean = words.map(letters);
   let best: { idx: number; id: number; d: number } | null = null;
@@ -77,5 +77,5 @@ export function findAgent(text: string, agents: { id: number; name: string }[]):
   }
   if (!best) return null;
   const rest = words.filter((_, i) => i !== best!.idx).join(" ").replace(/^[\s,.:;!?-]+/, "").trim();
-  return { id: best.id, rest };
+  return { id: best.id, rest, idx: best.idx };
 }
