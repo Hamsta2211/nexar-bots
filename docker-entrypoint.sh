@@ -14,6 +14,18 @@ if [ -x /opt/tts-venv/bin/python ] && [ -f /app/tts/tts_server.py ]; then
   echo "[entrypoint] TTS-Dienst (edge-tts) gestartet"
 fi
 
+# Hotword-Dienst (openWakeWord-Merkmale + Namensmodelle), lädt Modelle erst bei Bedarf und gibt sie im Leerlauf wieder frei
+if [ -x /opt/wake-venv/bin/python ] && [ -f /app/wake/wake_server.py ] && [ -f /opt/wake/models/embedding_model.onnx ]; then
+  (
+    while true; do
+      env -u ALL_PROXY -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy \
+        /opt/wake-venv/bin/python /app/wake/wake_server.py >>/tmp/wake.log 2>&1 || true
+      sleep 3
+    done
+  ) &
+  echo "[entrypoint] Hotword-Dienst gestartet"
+fi
+
 # Start Tailscale in userspace mode if auth key is present
 if [ -n "$TAILSCALE_AUTHKEY" ]; then
   echo "[entrypoint] Starting Tailscale (userspace)..."

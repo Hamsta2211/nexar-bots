@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useParams, Link } from "wouter";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, ChevronRight, Loader2, Mic, Plus, Trash2, Wrench, Copy, Square, Repeat } from "lucide-react";
+import { ArrowUp, Loader2, Mic, Plus, Trash2, Copy, Square } from "lucide-react";
 import type { Bot, Conversation, Message, ToolStep } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { streamChat } from "@/lib/stream";
@@ -12,43 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { BotAvatar, ProviderBadge, ago } from "@/lib/ui";
-
-function Steps({ steps }: { steps: ToolStep[] }) {
-  const [open, setOpen] = useState(false);
-  if (!steps.length) return null;
-  const toolSteps = steps.filter((s) => s.tool !== "nexar");
-  const notes = steps.filter((s) => s.tool === "nexar");
-  return (
-    <div className="mb-2">
-      {notes.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1.5">
-          {Array.from(new Set(notes.map((n) => n.result))).map((n) => (
-            <span key={n} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground" data-testid="chip-nexar-note">
-              <Repeat className="h-2.5 w-2.5" />{n}{notes.filter((x) => x.result === n).length > 1 ? ` (${notes.filter((x) => x.result === n).length}×)` : ""}
-            </span>
-          ))}
-        </div>
-      )}
-      {toolSteps.length > 0 && <>
-      <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 font-mono text-[11px] text-muted-foreground hover-elevate" data-testid="button-toggle-steps">
-        <Wrench className="h-3 w-3" />
-        {toolSteps.length} Werkzeug-Aufruf{toolSteps.length > 1 ? "e" : ""}: {Array.from(new Set(toolSteps.map((s) => s.tool))).join(", ")}
-        <ChevronRight className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`} />
-      </button>
-      {open && (
-        <div className="mt-2 space-y-2">
-          {toolSteps.map((s, i) => (
-            <div key={i} className="rounded-md border border-border bg-muted/40 p-2.5 font-mono text-[11px]">
-              <div className="text-primary">{s.tool}({JSON.stringify(s.args)})</div>
-              <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-muted-foreground">{s.result}</pre>
-            </div>
-          ))}
-        </div>
-      )}
-      </>}
-    </div>
-  );
-}
+import { Timeline, Artifacts, type LiveItem } from "@/components/chat-parts";
 
 const Bubble = memo(function Bubble({ m, bot }: { m: Pick<Message, "role" | "content" | "steps">; bot: Bot }) {
   const { toast } = useToast();
@@ -65,10 +29,11 @@ const Bubble = memo(function Bubble({ m, bot }: { m: Pick<Message, "role" | "con
     <div className="group flex gap-3">
       <BotAvatar bot={bot} size="sm" />
       <div className="min-w-0 flex-1">
-        <Steps steps={steps} />
+        <Timeline steps={steps} />
         <div className={`prose-chat text-sm ${isErr ? "text-destructive" : ""}`}>
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
         </div>
+        <Artifacts steps={steps} />
         <button
           onClick={() => { navigator.clipboard?.writeText(m.content); toast({ title: "Kopiert" }); }}
           className="mt-1 inline-flex items-center gap-1 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
@@ -92,7 +57,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
-  const [stream, setStream] = useState<{ text: string; events: string[] } | null>(null);
+  const [stream, setStream] = useState<{ text: string; items: LiveItem[] } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const botRef = useRef<number | undefined>(botId);
   botRef.current = botId;
@@ -108,7 +73,7 @@ export default function Chat() {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: sending ? "auto" : "smooth" });
-  }, [msgs, pending, stream?.text, stream?.events.length]);
+  }, [msgs, pending, stream?.text, stream?.items.length, stream?.items[stream.items.length - 1]]);
 
   // Antwort live (Wort für Wort) vom Server empfangen
   const run = async (text: string) => {
@@ -117,7 +82,7 @@ export default function Chat() {
     setPending(text);
     setInput("");
     setSending(true);
-    setStream({ text: "", events: [] });
+    setStream({ text: "", items: [] });
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     let cid: number | null = convId;
@@ -129,7 +94,20 @@ export default function Chat() {
         onStart: (id) => { cid = id; },
         onToken: (t) => { buf += t; if (!timer) timer = setTimeout(flush, 50); },
         onReset: () => { buf = ""; if (timer) { clearTimeout(timer); timer = 0; } setStream((s) => (s ? { ...s, text: "" } : s)); },
-        onEvent: (e) => setStream((s) => (s ? { ...s, events: [...s.events.filter((x) => x !== e), e].slice(-4) } : s)),
+        onThink: (t) => setStream((s) => {
+          if (!s) return s;
+          const items = [...s.items];
+          const last = items[items.length - 1];
+          if (last && last.kind === "think" && !last.done) items[items.length - 1] = { ...last, text: last.text + t };
+          else items.push({ kind: "think", text: t, done: false });
+          return { ...s, items };
+        }),
+        onThinkEnd: () => setStream((s) => {
+          if (!s) return s;
+          const items = s.items.map((it, i) => (i === s.items.length - 1 && it.kind === "think" ? { ...it, done: true } : it));
+          return { ...s, items };
+        }),
+        onStep: (step) => setStream((s) => (s ? { ...s, items: [...s.items, { kind: "tool", step }] } : s)),
       }, ctrl.signal);
     } catch (e: any) {
       if (!ctrl.signal.aborted) toast({ title: "Fehler", description: e?.message || String(e), variant: "destructive" });
@@ -239,26 +217,19 @@ export default function Chat() {
                   <div className="flex gap-3" data-testid="status-thinking">
                     <BotAvatar bot={bot} size="sm" />
                     <div className="min-w-0 flex-1">
-                      {stream.events.length > 0 && (
-                        <div className="mb-1.5 flex flex-wrap gap-1.5">
-                          {stream.events.map((e) => (
-                            <span key={e} className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
-                              <Wrench className="h-2.5 w-2.5" />{e}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                      <Timeline steps={stream.items} live />
                       {stream.text ? (
                         <div className="prose-chat text-sm">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>
                           <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary/70 align-middle" />
                         </div>
-                      ) : (
+                      ) : !stream.items.length ? (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Loader2 className="h-4 w-4 animate-spin" />
                           {bot.name} denkt nach …
                         </div>
-                      )}
+                      ) : null}
+                      <Artifacts steps={stream.items} />
                     </div>
                   </div>
                 )}

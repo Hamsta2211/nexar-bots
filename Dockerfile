@@ -26,10 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
   && python3 -m venv /opt/tts-venv \
   && /opt/tts-venv/bin/pip install --no-cache-dir edge-tts
 
+# Hotword-Erkennung: openWakeWord-Frontend (ONNX) + numpy. Optional: scheitert die Installation, läuft die App trotzdem.
+RUN ( python3 -m venv /opt/wake-venv \
+  && /opt/wake-venv/bin/pip install --no-cache-dir numpy onnxruntime tqdm requests \
+  && /opt/wake-venv/bin/pip install --no-cache-dir --no-deps openwakeword \
+  && mkdir -p /opt/wake/models \
+  && curl -fsSL -o /opt/wake/models/melspectrogram.onnx https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/melspectrogram.onnx \
+  && curl -fsSL -o /opt/wake/models/embedding_model.onnx https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/embedding_model.onnx \
+  ) || echo "WARNUNG: Hotword-Dienst konnte nicht installiert werden"
+
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 COPY server/tts /app/tts
+COPY server/wake /app/wake
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 

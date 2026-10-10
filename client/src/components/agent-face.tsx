@@ -16,9 +16,34 @@ export const FACE_LOOKS: FaceLook[] = [
 
 const BY_NAME: Record<string, number> = { nexar: 0, zylo: 1, kairo: 2, vexa: 3, brinx: 4, raze: 5, sera: 6, lumo: 7 };
 
-export function faceFor(name: string, id: number): FaceLook {
+export type FaceCfg = {
+  kind?: number; skin?: string; accent?: string;
+  eyes?: "round" | "wide" | "happy" | "calm" | "sleepy";
+  mouth?: "smile" | "grin" | "neutral" | "open";
+  brows?: "none" | "soft" | "strong" | "raised";
+  blush?: boolean;
+};
+
+export function faceFor(name: string, id: number, cfg?: FaceCfg | null): FaceLook & { cfg?: FaceCfg } {
   const k = BY_NAME[name.trim().toLowerCase()];
-  return FACE_LOOKS[k ?? Math.abs(id) % FACE_LOOKS.length];
+  const base = FACE_LOOKS[k ?? Math.abs(id) % FACE_LOOKS.length];
+  if (!cfg) return base;
+  const kind = cfg.kind ?? base.kind;
+  const preset = FACE_LOOKS[kind] || base;
+  const body = cfg.skin || (cfg.kind != null ? preset.body : base.body);
+  return {
+    kind,
+    body,
+    shade: cfg.skin ? shadeOf(cfg.skin) : cfg.kind != null ? preset.shade : base.shade,
+    accent: cfg.accent || (cfg.kind != null ? preset.accent : base.accent),
+    cfg,
+  };
+}
+
+function shadeOf(hex: string) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v: number) => Math.max(0, Math.round(v * 0.82)).toString(16).padStart(2, "0");
+  return `#${f((n >> 16) & 255)}${f((n >> 8) & 255)}${f(n & 255)}`;
 }
 
 /** Keyframes für Animationen (einmal pro Seite rendern). */
@@ -33,12 +58,16 @@ export function FaceStyles() {
   );
 }
 
-type Props = { look: FaceLook; speaking?: boolean; thinking?: boolean; laptop?: boolean; className?: string; title?: string };
+type Props = { look: FaceLook & { cfg?: FaceCfg }; speaking?: boolean; thinking?: boolean; laptop?: boolean; className?: string; title?: string };
 
 export function AgentFace({ look, speaking = false, thinking = false, laptop = true, className, title }: Props) {
   const mouth = useRef<SVGEllipseElement>(null);
   const uid = useId().replace(/:/g, "");
   const { kind, body, shade, accent } = look;
+  const cfg = look.cfg || {};
+  const eyes = cfg.eyes || "round";
+  const brows = cfg.brows || "strong";
+  const mouthStyle = cfg.mouth || "open";
   const dark = "#1d222b";
   const px = thinking ? 5 : 0;
   const py = thinking ? -6 : 2;
@@ -74,20 +103,54 @@ export function AgentFace({ look, speaking = false, thinking = false, laptop = t
         <path d="M100 22 C58 22 36 54 36 96 C36 120 30 134 24 150 C20 161 29 172 43 172 L157 172 C171 172 180 161 176 150 C170 134 164 120 164 96 C164 54 142 22 100 22 Z" fill={`url(#g${uid})`} />
 
         {/* Augen */}
-        <circle cx="74" cy="104" r="18" fill="#f4f5f7" />
-        <circle cx="126" cy="104" r="18" fill="#f4f5f7" />
-        <circle cx={74 + px} cy={104 + py} r="8.5" fill={dark} />
-        <circle cx={126 + px} cy={104 + py} r="8.5" fill={dark} />
+        <circle cx="74" cy="104" r={eyes === "wide" ? 21 : 18} fill="#f4f5f7" />
+        <circle cx="126" cy="104" r={eyes === "wide" ? 21 : 18} fill="#f4f5f7" />
+        <circle cx={74 + px} cy={104 + py} r={eyes === "wide" ? 7 : 8.5} fill={dark} />
+        <circle cx={126 + px} cy={104 + py} r={eyes === "wide" ? 7 : 8.5} fill={dark} />
+        {eyes === "happy" && (
+          <>
+            <path d="M54 106 Q74 80 94 106 Z" fill={body} />
+            <path d="M106 106 Q126 80 146 106 Z" fill={body} />
+          </>
+        )}
+        {eyes === "calm" && <path d="M54 94 H94 M106 94 H146" stroke={shade} strokeWidth="3" strokeLinecap="round" opacity=".0" />}
+        {eyes === "sleepy" && (
+          <>
+            <path d="M54 104 A20 20 0 0 1 94 104 Z" fill={body} />
+            <path d="M106 104 A20 20 0 0 1 146 104 Z" fill={body} />
+          </>
+        )}
 
         {/* Wütende Augenbrauen */}
-        {kind !== 7 && (
+        {kind !== 7 && brows === "strong" && (
           <>
             <polygon points="48,76 96,90 94,100 46,86" fill={dark} />
             <polygon points="152,76 104,90 106,100 154,86" fill={dark} />
           </>
         )}
+        {kind !== 7 && brows === "soft" && (
+          <>
+            <path d="M52 84 Q74 72 96 82" fill="none" stroke={dark} strokeWidth="5" strokeLinecap="round" />
+            <path d="M148 84 Q126 72 104 82" fill="none" stroke={dark} strokeWidth="5" strokeLinecap="round" />
+          </>
+        )}
+        {kind !== 7 && brows === "raised" && (
+          <>
+            <path d="M52 72 Q74 60 96 70" fill="none" stroke={dark} strokeWidth="5" strokeLinecap="round" />
+            <path d="M148 72 Q126 60 104 70" fill="none" stroke={dark} strokeWidth="5" strokeLinecap="round" />
+          </>
+        )}
+        {cfg.blush && (
+          <>
+            <ellipse cx="58" cy="132" rx="11" ry="6" fill="#d98a84" opacity=".45" />
+            <ellipse cx="142" cy="132" rx="11" ry="6" fill="#d98a84" opacity=".45" />
+          </>
+        )}
 
         {/* Mund */}
+        {!speaking && mouthStyle === "smile" && <path d="M84 142 Q100 156 116 142" fill="none" stroke={dark} strokeWidth="5" strokeLinecap="round" />}
+        {!speaking && mouthStyle === "grin" && <path d="M82 140 Q100 162 118 140 Z" fill={dark} />}
+        {!speaking && mouthStyle === "neutral" && <path d="M88 148 H112" stroke={dark} strokeWidth="5" strokeLinecap="round" />}
         <ellipse ref={mouth} cx="100" cy="146" rx="8" ry="0" fill={dark} />
 
         {/* Zubehör */}

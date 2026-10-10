@@ -5,7 +5,10 @@ export type StreamHandlers = {
   onToken?: (text: string) => void;
   onReset?: () => void;
   onEvent?: (text: string) => void;
-  onDone?: (message: any) => void;
+  onThink?: (text: string) => void;
+  onThinkEnd?: () => void;
+  onStep?: (step: { tool: string; args: any; result: string }) => void;
+  onDone?: (message: any, extra: { expect: boolean }) => void;
   onError?: (message: string) => void;
 };
 
@@ -48,7 +51,10 @@ export async function streamChat(
         case "token": h.onToken?.(ev.t); break;
         case "reset": h.onReset?.(); break;
         case "event": h.onEvent?.(ev.text); break;
-        case "done": h.onDone?.(ev.message); break;
+        case "think": h.onThink?.(ev.t); break;
+        case "think_end": h.onThinkEnd?.(); break;
+        case "step": h.onStep?.(ev.step); break;
+        case "done": h.onDone?.(ev.message, { expect: !!ev.expect }); break;
         case "error": h.onError?.(String(ev.error || "Fehler")); break;
       }
     }

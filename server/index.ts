@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { registerRoutes } from "./routes";
 import { registerStreamRoutes } from "./stream";
 import { registerPwaRoutes } from "./pwa";
+import { registerWakeRoutes } from "./wake";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 
@@ -60,7 +61,7 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api")) {
+    if (path.startsWith("/api") && path !== "/api/wake/feed") {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       // Keine Antwortinhalte loggen bei Anmeldung, Keys und SSH (enthält Tokens/Geheimnisse)
       if (capturedJsonResponse && !/^\/api\/(auth|keys|ssh)/.test(path)) {
@@ -79,6 +80,7 @@ app.use((req, res, next) => {
   await registerRoutes(httpServer, app);
   // Streaming-Chat, Sprachausgabe (Python/edge-tts) und App-Icons
   registerStreamRoutes(app);
+  registerWakeRoutes(app);
   registerPwaRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

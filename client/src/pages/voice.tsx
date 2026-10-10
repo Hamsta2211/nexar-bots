@@ -2,21 +2,26 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "wouter";
 import { motion } from "framer-motion";
-import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Send, Settings2, Users, Volume2 } from "lucide-react";
+import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Send, Settings2, Users, Volume2, Smile, Radio } from "lucide-react";
 import type { Bot } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
 import { streamChat } from "@/lib/stream";
-import { TtsPlayer, Listener, speechSupported } from "@/lib/voice";
+import { TtsPlayer } from "@/lib/voice";
+import { Mic as MicIn } from "@/lib/mic";
+import { Conductor, DEFAULT_CFG, type Snapshot } from "@/lib/conductor";
+import { WakeFeeder, getWakeStatus, transcribe, type WakeStatus } from "@/lib/wake-client";
+import { FaceEditor, useFaces } from "@/components/face-editor";
+import { WakeTrainer } from "@/components/wake-trainer";
 import { findAgent, speakable, takeSpeakable } from "@/lib/speech-utils";
-import { AgentFace, FaceStyles, faceFor } from "@/components/agent-face";
+import { AgentFace, FaceStyles, faceFor, type FaceCfg } from "@/components/agent-face";
 
 type VoiceInfo = {
   engine: "edge-tts" | "offline";
   voices: { id: string; name: string; lang: string; gender: string }[];
   assignments: Record<string, string>;
 };
-type TileState = "idle" | "thinking" | "speaking";
+type TileState = "idle" | "listening" | "thinking" | "speaking";
 
 function Waves({ active }: { active: boolean }) {
   return (
@@ -37,12 +42,13 @@ function Waves({ active }: { active: boolean }) {
   );
 }
 
-function Tile({ bot, index, state, big, dim, compact, solo }: {
-  bot: Bot; index: number; state: TileState; big: boolean; dim: boolean; compact: boolean; solo: boolean;
+function Tile({ bot, index, state, big, dim, compact, solo, cfg, countdown, thought }: {
+  bot: Bot; index: number; state: TileState; big: boolean; dim: boolean; compact: boolean; solo: boolean; cfg?: FaceCfg;
+  countdown: { ms: number; total: number; label: string } | null; thought: string;
 }) {
-  const look = faceFor(bot.name, bot.id);
+  const look = faceFor(bot.name, bot.id, cfg);
   const speaking = state === "speaking";
-  const label = speaking ? `${bot.name} spricht …` : state === "thinking" ? `${bot.name} denkt nach …` : solo ? `${bot.name} hört zu …` : bot.name;
+  const label = speaking ? `${bot.name} spricht …` : state === "thinking" ? `${bot.name} denkt nach …` : state === "listening" || solo ? `${bot.name} hört zu …` : bot.name;
   return (
     <motion.div
       layout
@@ -81,11 +87,25 @@ function Tile({ bot, index, state, big, dim, compact, solo }: {
           ))}
         </div>
       ) : big ? (
-        <Waves active={speaking} />
+        <Waves active={speaking || (state === "listening" && !countdown)} />
       ) : null}
+      {big && state === "thinking" && thought && (
+        <p className="mt-1 max-w-[280px] text-center text-[11px] italic text-muted-foreground" data-testid="text-thought">{thought}</p>
+      )}
+      {big && countdown && (
+        <div className="mt-2 w-[min(72vw,280px)]" data-testid="countdown">
+          <div className="h-1 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-[#7b9bc2]" style={{ width: `${Math.max(0, Math.min(100, (countdown.ms / countdown.total) * 100))}%`, transition: "width 120ms linear" }} />
+          </div>
+          <div className="mt-1 text-center text-[11px] text-muted-foreground">{countdown.label}</div>
+        </div>
+      )}
     </motion.div>
   );
 }
+
+const FOLLOW_KEY = "nexar_followup_ms";
+const readFollow = () => { try { return Number(localStorage.getItem(FOLLOW_KEY)) || 2000; } catch { return 2000; } };
 
 export default function VoicePage() {
   const params = useParams<{ id?: string }>();
@@ -93,51 +113,68 @@ export default function VoicePage() {
   const qc = useQueryClient();
   const { data: allBots } = useQuery<Bot[]>({ queryKey: ["/api/bots"] });
   const { data: vinfo, refetch: refetchVoices } = useQuery<VoiceInfo>({ queryKey: ["/api/tts/voices"], staleTime: 30_000 });
+  const { data: wake, refetch: refetchWake } = useQuery<WakeStatus>({ queryKey: ["/api/wake/status"], queryFn: getWakeStatus, staleTime: 15_000, retry: false });
+  const faces = useFaces();
   const agents = useMemo(() => (allBots || []).filter((b) => (soloId ? b.id === soloId : true)), [allBots, soloId]);
 
   const [live, setLive] = useState(false);
   const [micOn, setMicOn] = useState(true);
-  const [listening, setListening] = useState(false);
+  const [snap, setSnap] = useState<Snapshot | null>(null);
   const [speakerId, setSpeakerId] = useState<number | null>(null);
-  const [thinkingId, setThinkingId] = useState<number | null>(null);
   const [heard, setHeard] = useState("");
   const [caption, setCaption] = useState("");
+  const [thought, setThought] = useState("");
   const [hint, setHint] = useState("");
   const [typed, setTyped] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [followMs, setFollowMs] = useState(readFollow);
+  const [faceBot, setFaceBot] = useState<Bot | null>(null);
+  const [wakeBot, setWakeBot] = useState<Bot | null>(null);
 
   const player = useRef<TtsPlayer | null>(null);
-  const listenerRef = useRef<Listener | null>(null);
+  const micRef = useRef<MicIn | null>(null);
+  const feeder = useRef<WakeFeeder | null>(null);
+  const cond = useRef<Conductor | null>(null);
   const convIds = useRef(new Map<number, number>());
   const abortRef = useRef<AbortController | null>(null);
-  const pendingRef = useRef<{ id: number; until: number } | null>(null);
-  const streamingRef = useRef(false);
-  const curBotRef = useRef<number | null>(null);
+  const idleCb = useRef<(() => void) | null>(null);
   const micOnRef = useRef(true);
   const agentsRef = useRef<Bot[]>([]);
   const voicesRef = useRef<Record<string, string>>({});
-  const handleHeardRef = useRef<(t: string) => void>(() => {});
+  const wakeRef = useRef<WakeStatus | undefined>(undefined);
+  const liveRef = useRef(false);
   agentsRef.current = agents;
   voicesRef.current = vinfo?.assignments || {};
+  wakeRef.current = wake;
   micOnRef.current = micOn;
+  liveRef.current = live;
 
-  const finishTurn = () => {
-    setSpeakerId(null);
-    setThinkingId(null);
-    if (micOnRef.current) listenerRef.current?.resume();
-  };
+  const trainedIds = useMemo(() => new Set(Object.entries(wake?.agents || {}).filter(([, a]) => a.trained).map(([id]) => Number(id))), [wake]);
+  const wakeAvail = !!wake?.available;
 
   const ensurePlayer = () => {
     if (!player.current) {
       const p = new TtsPlayer();
-      p.onSpeaking = (on) => {
-        if (on) { listenerRef.current?.pause(); setThinkingId(null); setSpeakerId(curBotRef.current); }
-        else if (!streamingRef.current) setSpeakerId(null);
-      };
-      p.onIdle = () => { if (!streamingRef.current) finishTurn(); };
+      p.onSpeaking = (on) => { if (on) { setSpeakerId(cond.current?.target ?? null); cond.current?.speaking(); } else setSpeakerId(null); };
+      p.onIdle = () => { const cb = idleCb.current; idleCb.current = null; cb?.(); };
       player.current = p;
     }
     return player.current;
+  };
+
+  const voiceOf = (b: Bot) => voicesRef.current[String(b.id)] || "de-DE-KatjaNeural";
+  const slotOf = (b: Bot) => Math.max(0, agentsRef.current.findIndex((x) => x.id === b.id));
+
+  const greet = (id: number) => {
+    const b = agentsRef.current.find((x) => x.id === id);
+    const p = ensurePlayer();
+    p.stop();
+    if (!b) return cond.current?.greetDone();
+    let done = false;
+    const fin = () => { if (done) return; done = true; idleCb.current = null; setTimeout(() => cond.current?.greetDone(), 250); };
+    idleCb.current = fin;
+    setTimeout(fin, 7000);
+    p.enqueue("Ja?", voiceOf(b), slotOf(b));
   };
 
   const ask = async (bot: Bot, msg: string) => {
@@ -146,16 +183,13 @@ export default function VoicePage() {
     p.stop();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
-    curBotRef.current = bot.id;
-    streamingRef.current = true;
-    setThinkingId(bot.id);
     setSpeakerId(null);
     setCaption("");
+    setThought("");
     setHint("");
+    setHeard(msg);
 
-    let buf = "", full = "", first = true, capTimer: any = 0;
-    const slot = Math.max(0, agentsRef.current.findIndex((b) => b.id === bot.id));
-    const voice = voicesRef.current[String(bot.id)] || "de-DE-KatjaNeural";
+    let buf = "", full = "", first = true, capTimer: any = 0, expect = false, thinkBuf = "";
     const showCaption = () => { capTimer = 0; setCaption(full); };
     const drain = (final: boolean) => {
       for (;;) {
@@ -165,109 +199,134 @@ export default function VoicePage() {
         const s = speakable(part.chunk);
         if (!s) continue;
         first = false;
-        listenerRef.current?.pause(); // Echo vermeiden: nicht zuhören, während gesprochen wird
-        p.enqueue(s, voice, slot);
+        p.enqueue(s, voiceOf(bot), slotOf(bot));
       }
     };
+    let failed = false;
     try {
       await streamChat(bot.id, { message: msg, conversationId: convIds.current.get(bot.id) ?? null, voice: true }, {
         onStart: (cid) => convIds.current.set(bot.id, cid),
         onToken: (t) => { buf += t; full += t; if (!capTimer) capTimer = setTimeout(showCaption, 80); drain(false); },
-        onReset: () => { buf = ""; full = ""; setCaption(""); },
-        onError: (m) => setHint(m),
+        onThink: (t) => { thinkBuf = (thinkBuf + t).slice(-160); setThought(thinkBuf.replace(/\s+/g, " ").trim()); },
+        onThinkEnd: () => { thinkBuf = ""; },
+        onReset: () => { buf = ""; full = ""; first = true; setCaption(""); },
+        onDone: (_m, ex) => { expect = ex.expect; },
+        onError: (m) => { failed = true; setHint(m); },
       }, ctrl.signal);
       drain(true);
     } catch (e: any) {
+      failed = true;
       if (!ctrl.signal.aborted) setHint(e?.message || "Fehler");
     } finally {
       if (capTimer) clearTimeout(capTimer);
       setCaption(full);
-      if (abortRef.current === ctrl) {
-        streamingRef.current = false;
-        if (!p.hasPending()) finishTurn();
+      setThought("");
+      if (abortRef.current === ctrl && !ctrl.signal.aborted) {
+        const finish = () => setTimeout(() => { if (abortRef.current === ctrl) failed && !full ? cond.current?.agentFailed() : cond.current?.agentDone(expect); }, 320);
+        if (p.hasPending()) idleCb.current = finish; else finish();
       }
     }
   };
 
-  const handleHeard = (raw: string) => {
-    const text = raw.trim();
-    if (!text) return;
-    setHeard(text);
-    const list = agentsRef.current;
-    if (!list.length) return;
-    let target: Bot | undefined;
-    let msg = text;
-    if (soloId) {
-      target = list[0];
-    } else {
-      const f = findAgent(text, list.map((b) => ({ id: b.id, name: b.name })));
-      if (f) {
-        target = list.find((b) => b.id === f.id);
-        msg = f.rest;
-      } else if (pendingRef.current && pendingRef.current.until > Date.now()) {
-        target = list.find((b) => b.id === pendingRef.current!.id);
-      }
-      if (!target) { setHint(`Sag zuerst den Namen eines Agenten, z. B. „${list[0].name}, …“`); return; }
-      if (!msg.trim()) {
-        pendingRef.current = { id: target.id, until: Date.now() + 10_000 };
-        setHint(`${target.name} hört zu …`);
-        return;
-      }
-    }
-    pendingRef.current = null;
-    void ask(target, msg);
-  };
-  handleHeardRef.current = handleHeard;
+  const hintNames = () => agentsRef.current.map((b) => b.name).join(", ");
 
-  const start = () => {
+  const buildConductor = () => {
+    const cfg = {
+      ...DEFAULT_CFG,
+      solo: !!soloId,
+      followupMs: followMs,
+      nameFallback: !soloId && (!wakeRef.current?.available || agentsRef.current.some((b) => !wakeRef.current?.agents?.[String(b.id)]?.trained)),
+    };
+    const c = new Conductor({
+      greet,
+      transcribe: (pcm, _purpose, req) => {
+        transcribe(pcm, hintNames()).then((t) => { if (t) setHeard(t); c.transcribed(req, t); })
+          .catch((e) => { setHint(`Spracherkennung: ${e?.message || e}`); c.transcribed(req, ""); });
+      },
+      ask: (id, text) => { const b = agentsRef.current.find((x) => x.id === id); if (b) void ask(b, text); else c.agentFailed(); },
+      change: (s) => { setSnap(s); feeder.current?.setActive(c.wantsWake() && micOnRef.current); },
+      note: (m) => { if (m) setHint(m); else setHint(""); },
+    }, cfg, (t) => findAgent(t, agentsRef.current.map((b) => ({ id: b.id, name: b.name }))));
+    return c;
+  };
+
+  const start = async () => {
     if (!agents.length) return;
     ensurePlayer().unlock();
     void refetchVoices();
-    setLive(true);
+    const st = (await refetchWake().catch(() => null))?.data;
+    wakeRef.current = st || wakeRef.current;
     setHint("");
-    if (speechSupported()) {
-      if (!listenerRef.current) {
-        listenerRef.current = new Listener("de-DE", {
-          onInterim: (t) => setHeard(t),
-          onFinal: (t) => handleHeardRef.current(t),
-          onState: (s, msg) => { setListening(s === "on"); if (s === "error" && msg) setHint(msg); },
-        });
-      }
-      if (micOnRef.current) listenerRef.current.start();
-    } else {
-      setHint("Dieser Browser hat keine Spracherkennung (nutze Chrome, Edge oder Safari). Du kannst unten tippen – die Agenten antworten trotzdem per Stimme.");
+    try {
+      const mic = new MicIn();
+      await mic.start();
+      micRef.current = mic;
+    } catch (e: any) {
+      setHint(e?.name === "NotAllowedError" ? "Mikrofon-Zugriff verweigert – bitte im Browser erlauben. Du kannst unten tippen." : `Mikrofon nicht verfügbar: ${e?.message || e}. Du kannst unten tippen.`);
+      micRef.current = null;
     }
+    const c = buildConductor();
+    cond.current = c;
+    const f = new WakeFeeder();
+    f.onHit = (id) => {
+      if (!agentsRef.current.some((b) => b.id === id)) return;
+      const b = agentsRef.current.find((x) => x.id === id)!;
+      setHint(`„${b.name}“ erkannt`);
+      c.onHit(id);
+    };
+    f.onUnavailable = () => { setHint("Hotword-Dienst nicht erreichbar – Namen werden per Spracherkennung gesucht."); c.cfg.nameFallback = true; };
+    feeder.current = f;
+    if (micRef.current) {
+      micRef.current.onFrame = (fr) => {
+        if (!micOnRef.current) return;
+        c.frame(fr);
+        f.push(fr);
+      };
+    }
+    setLive(true);
+    c.start(soloId ?? undefined);
   };
 
   const end = () => {
     abortRef.current?.abort();
-    streamingRef.current = false;
+    abortRef.current = null;
+    idleCb.current = null;
     player.current?.stop();
-    listenerRef.current?.stop();
-    pendingRef.current = null;
+    feeder.current?.setActive(false);
+    micRef.current?.stop();
+    micRef.current = null;
+    cond.current?.stop();
+    cond.current = null;
     setLive(false);
+    setSnap(null);
     setSpeakerId(null);
-    setThinkingId(null);
     setHeard("");
     setCaption("");
+    setThought("");
   };
 
-  const toggleMic = () => {
-    const next = !micOn;
-    setMicOn(next);
-    micOnRef.current = next;
-    const l = listenerRef.current;
-    if (!l) return;
-    if (next) { l.start(); if (player.current?.speaking) l.pause(); }
-    else l.stop();
+  const toggleMic = () => { const n = !micOn; setMicOn(n); micOnRef.current = n; if (!n) feeder.current?.setActive(false); else if (cond.current) feeder.current?.setActive(cond.current.wantsWake()); };
+
+  const submitTyped = (raw: string) => {
+    const text = raw.trim();
+    const c = cond.current;
+    if (!text || !c) return;
+    const list = agentsRef.current;
+    let target = soloId ? list[0] : list.find((b) => b.id === c.target);
+    let msg = text;
+    if (!soloId) {
+      const f = findAgent(text, list.map((b) => ({ id: b.id, name: b.name })));
+      if (f) { target = list.find((b) => b.id === f.id); msg = f.rest || text; }
+    }
+    if (!target) { setHint(`Sag oder tippe zuerst den Namen eines Agenten, z. B. „${list[0]?.name}, …“`); return; }
+    c.external(target.id);
+    void ask(target, msg);
   };
 
   const previewVoice = (b: Bot, i: number, voice: string) => {
     const p = ensurePlayer();
     p.unlock();
     p.stop();
-    curBotRef.current = b.id;
-    streamingRef.current = false;
     p.enqueue(`Hallo, ich bin ${b.name}. So klingt meine Stimme.`, voice, i);
   };
 
@@ -278,16 +337,36 @@ export default function VoicePage() {
     } catch {}
   };
 
-  useEffect(() => { end(); }, [soloId]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => () => {
-    abortRef.current?.abort();
-    player.current?.stop();
-    listenerRef.current?.stop();
-  }, []);
+  const setFollow = (ms: number) => { setFollowMs(ms); try { localStorage.setItem(FOLLOW_KEY, String(ms)); } catch {} if (cond.current) cond.current.cfg.followupMs = ms; };
 
-  const activeId = speakerId ?? thinkingId;
-  const stateOf = (id: number): TileState => (id === speakerId ? "speaking" : id === thinkingId ? "thinking" : "idle");
-  const status = speakerId ? "1 spricht" : thinkingId ? "1 denkt nach" : live ? (listening ? "hört zu" : "bereit") : "nicht gestartet";
+  useEffect(() => { end(); }, [soloId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { abortRef.current?.abort(); player.current?.stop(); micRef.current?.stop(); }, []);
+
+  const target = live ? snap?.target ?? null : null;
+  const phase = snap?.phase;
+  const activeId = soloId ? soloId : target;
+  const stateOf = (id: number): TileState => {
+    if (id !== activeId) return "idle";
+    if (id === speakerId || phase === "speaking") return "speaking";
+    if (phase === "thinking" || phase === "transcribing") return "thinking";
+    return "listening";
+  };
+  const countdown = (() => {
+    if (!live || !snap || snap.endInMs == null) return null;
+    if (snap.recording) {
+      if (snap.silenceMs < 250) return null;
+      return { ms: snap.endInMs, total: DEFAULT_CFG.endSilenceMs, label: `Ich sende in ${(snap.endInMs / 1000).toFixed(1)} s, wenn du nichts mehr sagst` };
+    }
+    if (snap.followup) return { ms: snap.endInMs, total: followMs, label: "Antwort erwartet – sprich jetzt" };
+    return null;
+  })();
+  const status = !live ? "nicht gestartet"
+    : phase === "speaking" ? "1 spricht"
+    : phase === "thinking" ? "1 denkt nach"
+    : phase === "transcribing" ? "versteht …"
+    : phase === "greeting" || phase === "armed" ? "Name erkannt"
+    : phase === "capturing" ? (snap?.recording ? "nimmt auf" : "hört zu")
+    : soloId ? "hört zu" : "wartet auf einen Namen";
   const voices = vinfo?.voices || [];
   const groups = useMemo(() => {
     const m = new Map<string, typeof voices>();
@@ -298,6 +377,8 @@ export default function VoicePage() {
   return (
     <div className="flex h-full flex-col">
       <FaceStyles />
+      <FaceEditor bot={faceBot} open={!!faceBot} onClose={() => setFaceBot(null)} />
+      <WakeTrainer bot={wakeBot} open={!!wakeBot} onClose={() => { setWakeBot(null); void refetchWake(); }} serviceUp={!!wake?.serviceUp} />
       <div className="flex items-center gap-3 border-b border-border px-4 py-3 sm:px-6">
         <Link href={soloId ? `/chat/${soloId}` : "/chat"}>
           <Button variant="ghost" size="icon" aria-label="Zurück" data-testid="button-voice-back"><ArrowLeft className="h-4 w-4" /></Button>
@@ -307,11 +388,11 @@ export default function VoicePage() {
             {soloId ? `Voice-Chat mit ${agents[0]?.name ?? "…"}` : "Gruppen-Voice-Chat"}
           </h1>
           <p className="text-xs text-muted-foreground">
-            {soloId ? "Sprich direkt mit diesem Agenten." : "Sag den Namen eines Agenten – dann antwortet nur er."}
+            {soloId ? "Sprich direkt mit diesem Agenten." : "Sag den Namen eines Agenten – er antwortet „Ja“ und hört dir zu."}
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => setSettingsOpen((o) => !o)} data-testid="button-voice-settings">
-          <Settings2 className="mr-1.5 h-4 w-4" />Stimmen
+          <Settings2 className="mr-1.5 h-4 w-4" />Einstellungen
         </Button>
       </div>
 
@@ -325,13 +406,14 @@ export default function VoicePage() {
 
           {settingsOpen && (
             <div className="mb-4 rounded-xl border border-border bg-card p-3">
-              <div className="mb-1 text-sm font-medium">Stimmen der Agenten</div>
-              <p className="mb-2 text-xs text-muted-foreground">Jeder Agent bekommt seine eigene Microsoft-Stimme. Mit dem Lautsprecher kannst du sie anhören.</p>
+              <div className="mb-1 text-sm font-medium">Agenten</div>
+              <p className="mb-2 text-xs text-muted-foreground">Stimme (Microsoft), Gesicht und – für den Gruppen-Chat – das Hotword jedes Agenten.</p>
               {agents.map((b, i) => {
                 const cur = vinfo?.assignments?.[String(b.id)] || "";
+                const trained = trainedIds.has(b.id);
                 return (
-                  <div key={b.id} className="flex items-center gap-2 py-1.5">
-                    <div className="w-9 shrink-0"><AgentFace look={faceFor(b.name, b.id)} laptop={false} title={b.name} /></div>
+                  <div key={b.id} className="flex flex-wrap items-center gap-2 py-1.5">
+                    <div className="w-9 shrink-0"><AgentFace look={faceFor(b.name, b.id, faces[String(b.id)])} laptop={false} title={b.name} /></div>
                     <span className="w-20 shrink-0 truncate text-sm">{b.name}</span>
                     <select
                       value={cur}
@@ -349,9 +431,28 @@ export default function VoicePage() {
                     <Button size="icon" variant="outline" onClick={() => previewVoice(b, i, cur || "de-DE-KatjaNeural")} aria-label={`Stimme von ${b.name} anhören`} data-testid={`button-voice-test-${b.id}`}>
                       <Volume2 className="h-4 w-4" />
                     </Button>
+                    <Button size="icon" variant="outline" onClick={() => setFaceBot(b)} aria-label={`Gesicht von ${b.name} anpassen`} data-testid={`button-face-${b.id}`}>
+                      <Smile className="h-4 w-4" />
+                    </Button>
+                    {!soloId && (
+                      <Button size="sm" variant={trained ? "outline" : "default"} onClick={() => setWakeBot(b)} data-testid={`button-wake-${b.id}`}>
+                        <Radio className="mr-1.5 h-3.5 w-3.5" />{trained ? "Hotword ✓" : "Hotword trainieren"}
+                      </Button>
+                    )}
                   </div>
                 );
               })}
+              {!soloId && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+                  <span>Wartezeit auf deine Antwort nach einer Rückfrage:</span>
+                  {[2000, 4000, 8000].map((ms) => (
+                    <button key={ms} type="button" onClick={() => setFollow(ms)} className={`rounded-md border px-2 py-0.5 ${followMs === ms ? "border-[#6e92bd] bg-[#6e92bd]/15 text-foreground" : "border-border"}`}>{ms / 1000} s</button>
+                  ))}
+                  <span className="basis-full">
+                    Hotword-Dienst: {wake ? (wake.available ? "bereit" : wake.serviceUp ? "startet …" : "nicht erreichbar (läuft nur auf dem Server)") : "…"}. Agenten ohne Hotword-Training werden über die Spracherkennung am Namen erkannt.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -370,6 +471,9 @@ export default function VoicePage() {
                     dim={live && !soloId && activeId !== null && b.id !== activeId}
                     compact={live && !soloId && activeId !== null}
                     solo={!!soloId}
+                    cfg={faces[String(b.id)]}
+                    countdown={b.id === activeId ? countdown : null}
+                    thought={b.id === activeId ? thought : ""}
                   />
                 ))}
               </div>
@@ -379,7 +483,7 @@ export default function VoicePage() {
           <div className="mt-4 min-h-[3.5rem] space-y-1.5 text-center" aria-live="polite">
             {!live && agents.length > 0 && (
               <p className="text-sm text-muted-foreground">
-                {soloId ? "Starte den Anruf und sprich los." : `Starte den Anruf und sprich zum Beispiel „${agents[0].name}, wie wird das Wetter?“`}
+                {soloId ? "Starte den Anruf und sprich los. Gesendet wird, wenn du 2 Sekunden nichts mehr sagst." : `Starte den Anruf und sag zum Beispiel „${agents[0].name}“ – dann antwortet er mit „Ja“ und du sprichst deine Frage.`}
               </p>
             )}
             {hint && <p className="text-xs text-muted-foreground" data-testid="text-voice-hint">{hint}</p>}
@@ -392,10 +496,7 @@ export default function VoicePage() {
       <div className="border-t border-border bg-card/60 px-4 py-3 sm:px-6">
         <div className="mx-auto flex max-w-4xl flex-col gap-3">
           {live && (
-            <form
-              onSubmit={(e) => { e.preventDefault(); const t = typed.trim(); if (t) { setTyped(""); handleHeard(t); } }}
-              className="flex gap-2"
-            >
+            <form onSubmit={(e) => { e.preventDefault(); const t = typed.trim(); if (t) { setTyped(""); submitTyped(t); } }} className="flex gap-2">
               <input
                 value={typed}
                 onChange={(e) => setTyped(e.target.value)}
@@ -417,23 +518,10 @@ export default function VoicePage() {
             <div className="flex items-center gap-2">
               {live ? (
                 <>
-                  <Button
-                    size="icon"
-                    variant={micOn ? "default" : "outline"}
-                    onClick={toggleMic}
-                    aria-label={micOn ? "Mikrofon ausschalten" : "Mikrofon einschalten"}
-                    className="h-11 w-11 rounded-full"
-                    data-testid="button-voice-mic"
-                  >
+                  <Button size="icon" variant={micOn ? "default" : "outline"} onClick={toggleMic} aria-label={micOn ? "Mikrofon ausschalten" : "Mikrofon einschalten"} className="h-11 w-11 rounded-full" data-testid="button-voice-mic">
                     {micOn ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
                   </Button>
-                  <Button
-                    size="icon"
-                    onClick={end}
-                    aria-label="Anruf beenden"
-                    className="h-11 w-11 rounded-full bg-[#a8443d] text-white hover:bg-[#933b35]"
-                    data-testid="button-voice-end"
-                  >
+                  <Button size="icon" onClick={end} aria-label="Anruf beenden" className="h-11 w-11 rounded-full bg-[#a8443d] text-white hover:bg-[#933b35]" data-testid="button-voice-end">
                     <PhoneOff className="h-5 w-5" />
                   </Button>
                 </>
