@@ -5,6 +5,7 @@ import { registerRoutes } from "./routes";
 import { registerStreamRoutes } from "./stream";
 import { registerPwaRoutes } from "./pwa";
 import { registerWakeRoutes } from "./wake";
+import { registerJobRoutes } from "./jobs";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 
@@ -81,6 +82,7 @@ app.use((req, res, next) => {
   // Streaming-Chat, Sprachausgabe (Python/edge-tts) und App-Icons
   registerStreamRoutes(app);
   registerWakeRoutes(app);
+  registerJobRoutes(app);
   registerPwaRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
