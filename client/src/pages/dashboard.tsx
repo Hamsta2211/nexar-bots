@@ -4,6 +4,7 @@ import { ArrowRight, CheckCircle2, Circle, AlertTriangle } from "lucide-react";
 import type { Stats, KeyStatus, Bot } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useJobs, JobCard } from "@/pages/jobs";
 import { PageHeader, ago, BotAvatar, ProviderBadge } from "@/lib/ui";
 
 function fmtUptime(s: number) {
@@ -15,6 +16,8 @@ export default function Dashboard() {
   const { data: stats, isLoading } = useQuery<Stats>({ queryKey: ["/api/stats"], refetchInterval: 15_000, staleTime: 0 });
   const { data: keys } = useQuery<KeyStatus>({ queryKey: ["/api/keys"] });
   const { data: bots } = useQuery<Bot[]>({ queryKey: ["/api/bots"] });
+  const { data: jobs } = useJobs(5000);
+  const openJobs = (jobs || []).filter((j) => j.status === "open").slice(0, 6);
 
   const steps = [
     { done: !!(keys?.groq.set || keys?.google.set), label: "API-Key für Groq oder Google hinterlegen", href: "/settings" },
@@ -49,6 +52,18 @@ export default function Dashboard() {
             </div>
           ))}
         </div>
+
+        <section className="rounded-lg border border-card-border bg-card" data-testid="section-jobs">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold">Aktuelle Aufgaben</h2>
+            <Link href="/jobs" className="text-xs text-muted-foreground underline">Alle</Link>
+          </div>
+          {!openJobs.length ? (
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">Keine offenen Aufgaben. <Link href="/jobs" className="underline">Aufgabe anlegen</Link></div>
+          ) : (
+            <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">{openJobs.map((j) => <JobCard key={j.id} job={j} bots={bots || []} />)}</div>
+          )}
+        </section>
 
         <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
           <section className="rounded-lg border border-card-border bg-card">
