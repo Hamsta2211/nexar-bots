@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { storage } from "./storage";
 import { runAgent } from "./agent";
+import { MarkFilter, hasExpectMark, stripExpectMark, EXPECT_MARK } from "@shared/think";
 
 // Streaming-Chat (SSE) und Sprachausgabe (Python-Dienst mit edge-tts) 
 
@@ -10,6 +11,7 @@ const VOICE_HINT = [
   "## Sprachmodus",
   "Deine Antwort wird laut vorgelesen. Antworte natürlich gesprochen, in kurzen, klaren Sätzen und ohne Markdown, Listen, Tabellen, Emojis oder Links.",
   "Fasse dich kurz (meist 1 bis 3 Sätze), außer der Nutzer will ausdrücklich mehr.",
+  `Wenn du vom Nutzer als Nächstes eine Antwort erwartest (du hast eine Frage gestellt oder brauchst eine Auswahl/Bestätigung), hänge ganz am Ende deiner Antwort exakt ${EXPECT_MARK} an. Der Marker wird nicht vorgelesen; das System hört dann automatisch weiter zu und schickt die nächste Äußerung wieder an dich. Ohne Rückfrage hängst du nichts an.`,
 ].join("\n");
 
 type ConvSummary = { upto: number; text: string };
@@ -85,6 +87,7 @@ export function registerStreamRoutes(app: Express) {
       : bot;
     const t0 = Date.now();
     let streamed = "";
+    const mark = new MarkFilter((t) => { streamed += t; send({ type: "token", t }); });
     let summaryWrite: Promise<void> = Promise.resolve();
     try {
       const r = await runAgent(effBot, history, {
@@ -95,14 +98,20 @@ export function registerStreamRoutes(app: Express) {
           summaryWrite = storage.setSetting(`convsum_${convId}`, JSON.stringify({ upto, text: t }));
         },
         onEvent: (t) => send({ type: "event", text: t }),
-        onToken: (t) => { streamed += t; send({ type: "token", t }); },
-        onStreamReset: () => { streamed = ""; send({ type: "reset" }); },
+        onToken: (t) => mark.push(t),
+        onThink: (t) => send({ type: "think", t }),
+        onThinkEnd: () => send({ type: "think_end" }),
+        onStep: (step) => send({ type: "step", step: { tool: step.tool, args: step.args, result: step.result } }),
+        onStreamReset: () => { mark.end(); streamed = ""; send({ type: "reset" }); },
       });
+      mark.end();
+      const expect = voice && hasExpectMark(r.content);
+      r.content = stripExpectMark(r.content) || "(keine Antwort)";
       await summaryWrite;
       const msg = await storage.addMessage(convId, "assistant", r.content, JSON.stringify(r.steps));
       await storage.touchConversation(convId);
       await storage.addRun({ taskId: null, botId: bot.id, source: "chat", status: "ok", output: r.content.slice(0, 500), tokens: r.tokens, durationMs: Date.now() - t0, startedAt: t0 });
-      send({ type: "done", message: msg });
+      send({ type: "done", message: msg, expect });
     } catch (e: any) {
       const aborted = ctrl.signal.aborted;
       const errText = aborted
