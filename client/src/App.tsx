@@ -16,6 +16,8 @@ const Dashboard = lazy(() => import("@/pages/dashboard"));
 const Bots = lazy(() => import("@/pages/bots"));
 const Chat = lazy(() => import("@/pages/chat"));
 const Voice = lazy(() => import("@/pages/voice"));
+const Jobs = lazy(() => import("@/pages/jobs"));
+const JobDetail = lazy(() => import("@/pages/job-detail"));
 const Tasks = lazy(() => import("@/pages/tasks"));
 const Settings = lazy(() => import("@/pages/settings"));
 const Hosting = lazy(() => import("@/pages/hosting"));
@@ -32,6 +34,8 @@ function AppRouter() {
         <Route path="/chat/:id" component={Chat} />
         <Route path="/voice" component={Voice} />
         <Route path="/voice/:id" component={Voice} />
+        <Route path="/jobs" component={Jobs} />
+        <Route path="/jobs/:id" component={JobDetail} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/settings" component={Settings} />
         <Route path="/hosting" component={Hosting} />
