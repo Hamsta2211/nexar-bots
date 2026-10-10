@@ -1,8 +1,9 @@
 import type { Bot, Provider, ToolId, ToolStep } from "@shared/schema";
 import { storage } from "./storage";
-import { sshExec } from "./ssh";
+import { sshExec, getSshConfig } from "./ssh";
 import { withKey, firstKey, classify, ProviderError } from "./keys";
 import { getCatalog } from "./models";
+import { ThinkFilter, splitThinking } from "@shared/think";
 
 export const PROVIDER_BASE: Record<Provider, string> = {
   groq: process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1",
@@ -55,7 +56,7 @@ async function rawFetch(provider: Provider, key: string, path: string, init: Req
  */
 async function rawStream(
   provider: Provider, key: string, body: any,
-  hooks: { onToken: (t: string) => void; onStart: () => void }, signal?: AbortSignal,
+  hooks: { onToken: (t: string) => void; onStart: () => void; onReasoning?: (t: string) => void }, signal?: AbortSignal,
 ) {
   let res: Response;
   try {
@@ -83,6 +84,7 @@ async function rawStream(
   hooks.onStart();
 
   let content = "";
+  let reasoning = "";
   let usage: any = null;
   const calls: any[] = [];
 
@@ -100,6 +102,8 @@ async function rawStream(
     usage = j?.usage || j?.x_groq?.usage || usage;
     const dl = j?.choices?.[0]?.delta;
     if (!dl) return;
+    const rs = dl.reasoning_content ?? dl.reasoning;
+    if (typeof rs === "string" && rs) { reasoning += rs; hooks.onReasoning?.(rs); }
     if (typeof dl.content === "string" && dl.content) {
       content += dl.content;
       hooks.onToken(dl.content);
@@ -142,7 +146,7 @@ async function rawStream(
 
   calls.forEach((c, i) => { if (!c.id) c.id = `call_${Date.now().toString(36)}_${i}`; if (!c.function.arguments) c.function.arguments = "{}"; });
   return {
-    choices: [{ message: { role: "assistant", content: content || null, tool_calls: calls.length ? calls : undefined } }],
+    choices: [{ message: { role: "assistant", content: content || null, reasoning: reasoning || undefined, tool_calls: calls.length ? calls : undefined } }],
     usage,
   };
 }
@@ -158,6 +162,35 @@ export async function listModels(provider: Provider, keyOverride?: string): Prom
   if (provider === "google") ids = ids.filter((id) => id.startsWith("gemini") && !/embedding|tts|image|live|audio/.test(id));
   if (provider === "groq") ids = ids.filter((id) => !/whisper|tts|guard|orpheus|playai/.test(id));
   return ids.sort();
+}
+
+// ---------- Dateien auf dem PC ----------
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+const PROTECTED = /^\/(etc|boot|usr|bin|sbin|lib|lib64|sys|proc|dev|root|var\/(lib|log|spool)|opt\/[^/]+\/)/;
+
+async function writeFileOnPc(rawPath: string, content: string, executable: boolean) {
+  let path = rawPath.trim();
+  if (!path) throw new Error("Pfad fehlt");
+  if (path.includes("\0") || path.includes("\n")) throw new Error("Ungültiger Pfad");
+  if (!/^(~|\/|\.)/.test(path)) path = `~/${path}`;
+  if (path.endsWith("/")) throw new Error("Pfad muss eine Datei sein");
+  const cfg = getSshConfig();
+  if (cfg.safeMode && PROTECTED.test(path.replace(/^~/, "/home/x"))) throw new Error(`Durch den Sicherheitsmodus blockiert: Schreiben nach ${path}`);
+  if (Buffer.byteLength(content, "utf8") > 400_000) throw new Error("Datei zu groß (max. 400 KB)");
+  const dest = path.startsWith("~/") ? `"$HOME"/${shq(path.slice(2))}` : shq(path);
+  const b64 = Buffer.from(content, "utf8").toString("base64");
+  const CH = 60_000;
+  for (let i = 0; i < Math.max(1, b64.length); i += CH) {
+    const first = i === 0;
+    const cmd = [
+      first ? `d=${dest}; mkdir -p "$(dirname "$d")"; : > "$d"` : `d=${dest}`,
+      `printf %s ${shq(b64.slice(i, i + CH))} | base64 -d >> "$d"`,
+    ].join(" && ");
+    const r = await sshExec(cmd, { bypassSafe: true, timeoutMs: 30_000 });
+    if (r.code !== 0) throw new Error(`Schreiben fehlgeschlagen: ${(r.stderr || r.stdout).slice(0, 300)}`);
+  }
+  if (executable) await sshExec(`chmod +x ${dest}`, { bypassSafe: true, timeoutMs: 15_000 });
+  return `Geschrieben: ${path} (${Buffer.byteLength(content, "utf8")} Bytes${executable ? ", ausführbar" : ""})`;
 }
 
 // ---------- Tools ----------
@@ -279,6 +312,22 @@ const TOOLBOX: Record<ToolId, ToolDef[]> = {
       const out = [`exit=${r.code}`, r.stdout && `stdout:\n${r.stdout.slice(-6000)}`, r.stderr && `stderr:\n${r.stderr.slice(-2000)}`].filter(Boolean).join("\n");
       return out;
     },
+  }, {
+    name: "write_file_on_my_pc",
+    description: "Legt eine Datei (z.B. Python-/Shell-Skript, HTML, Konfiguration) auf dem Ubuntu-PC des Nutzers an und zeigt sie dem Nutzer im Chat als öffnbares Artefakt. Nutze das statt cat/echo-Heredocs, wenn du ein Skript erstellst. Pfad mit ~ möglich (z.B. ~/skripte/backup.py). Überschreibt vorhandene Dateien. Mache Skripte danach ggf. mit run_on_my_pc ausführbar (chmod +x) und teste sie.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Zielpfad, z.B. ~/skripte/hallo.py" },
+        content: { type: "string", description: "Kompletter Dateiinhalt (UTF-8)" },
+        executable: { type: "boolean", description: "Datei ausführbar machen (chmod +x)" },
+      },
+      required: ["path", "content"],
+    },
+    run: async ({ path, content, executable }) => {
+      const res = await writeFileOnPc(String(path || ""), String(content ?? ""), !!executable);
+      return res;
+    },
   }],
   memory: [
     {
@@ -305,7 +354,7 @@ export const TOOL_META: Record<ToolId, { label: string; description: string }> =
   fetch_url: { label: "Webseiten lesen", description: "Lädt und liest beliebige öffentliche URLs" },
   web_search: { label: "Websuche", description: "Sucht aktuelle Infos über DuckDuckGo" },
   memory: { label: "Gedächtnis", description: "Merkt sich Fakten dauerhaft pro Bot" },
-  linux_pc: { label: "Mein Linux-PC", description: "Führt Befehle per SSH auf deinem Ubuntu-PC aus" },
+  linux_pc: { label: "Mein Linux-PC", description: "Führt Befehle per SSH aus und legt Skripte/Dateien auf deinem Ubuntu-PC an (als Artefakt im Chat)" },
 };
 
 // ---------- Agent loop ----------
@@ -339,6 +388,9 @@ export type RunOpts = {
   signal?: AbortSignal;
   onEvent?: (text: string) => void;
   onToken?: (text: string) => void;                        // wenn gesetzt: Antwort wird live gestreamt
+  onThink?: (text: string) => void;                        // Gedanken (Text wächst stückweise)
+  onThinkEnd?: () => void;                                 // aktueller Gedankenblock ist fertig
+  onStep?: (step: ToolStep) => void;                       // Werkzeugschritt abgeschlossen
   onStreamReset?: () => void;                              // neuer Streaming-Versuch (Zwischentext verwerfen)
 };
 
@@ -417,6 +469,13 @@ async function compact(
   return [{ role: "system", content: `${baseSys}\n\n## Zusammenfassung früherer Gesprächsteile\n${summary}` }, ...tail];
 }
 
+const THINK_HINT = [
+  "## Denken",
+  "Denke nach, bevor du handelst oder antwortest: Schreibe deine Überlegungen in <denken>…</denken> (Deutsch, knapp, in kurzen Sätzen oder Stichpunkten).",
+  "Du darfst und sollst mehrfach nachdenken: zuerst zur Aufgabe und zum Plan, nach jedem Werkzeugergebnis zur Auswertung, und kurz vor der Antwort zur Kontrolle.",
+  "Alles außerhalb der <denken>-Tags ist die Antwort an den Nutzer. Der Nutzer sieht deine Überlegungen nur eingeklappt. Werkzeugaufrufe gehören nie in die Tags; schließe jeden Block mit </denken>.",
+].join("\n");
+
 export async function runAgent(bot: Bot, history: { role: string; content: string }[], opts: RunOpts = {}) {
   const provider = bot.provider as Provider;
   const enabled: ToolId[] = JSON.parse(bot.tools || "[]");
@@ -426,6 +485,7 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
   const sys = [
     bot.systemPrompt || `Du bist ${bot.name}, ein hilfreicher KI-Agent.`,
     `Aktuelles Datum: ${new Date().toISOString().slice(0, 10)}.`,
+    THINK_HINT,
     defs.length ? "Nutze deine Werkzeuge aktiv und so oft wie nötig, bis die Aufgabe wirklich erledigt ist. Antworte danach klar und knapp." : "",
     mem.length ? `Bekannte Notizen:\n${mem.map((m) => `- ${m.content}`).join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
@@ -456,13 +516,28 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
     if (totalTok(msgs) > budget) msgs = await compact(provider, bot.model, msgs, budget, state, opts, note);
 
     let data: any;
+    let streamedLive = false;
     for (let attempt = 0; ; attempt++) {
       const body: any = { model: bot.model, messages: clean(msgs), temperature: bot.temperature };
       if (tools && !forceAnswer) { body.tools = tools; body.tool_choice = "auto"; }
       try {
         if (opts.onToken) {
-          const hooks = { onToken: opts.onToken, onStart: () => opts.onStreamReset?.() };
-          data = await withKey(provider, (key) => rawStream(provider, key, body, hooks, opts.signal), { signal: opts.signal, onSwitch: note });
+          let native = false;
+          const endNative = () => { if (native) { native = false; opts.onThinkEnd?.(); } };
+          const filter = new ThinkFilter({
+            onText: (t) => opts.onToken!(t),
+            onThink: (t) => opts.onThink?.(t),
+            onThinkEnd: () => opts.onThinkEnd?.(),
+          });
+          const hooks = {
+            onToken: (t: string) => { endNative(); filter.push(t); },
+            onReasoning: (t: string) => { native = true; opts.onThink?.(t); },
+            onStart: () => opts.onStreamReset?.(),
+          };
+          streamedLive = true;
+          try {
+            data = await withKey(provider, (key) => rawStream(provider, key, body, hooks, opts.signal), { signal: opts.signal, onSwitch: note });
+          } finally { filter.end(); endNative(); }
         } else {
           data = await providerFetch(provider, "/chat/completions", { method: "POST", body: JSON.stringify(body) }, undefined, { signal: opts.signal, onSwitch: note });
         }
@@ -484,9 +559,19 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
     const msg = data?.choices?.[0]?.message;
     if (!msg) throw new Error("Leere Antwort vom Modell");
     const calls = msg.tool_calls || [];
-    if (!calls.length) {
-      return { content: String(msg.content || "").trim() || "(keine Antwort)", steps, tokens, summary: state.summary, covered: state.covered };
+    // Gedanken aus der Antwort lösen und als eigene Schritte festhalten (mehrere pro Antwort möglich)
+    const sp = splitThinking(String(msg.content || ""));
+    const nativeThought = String(msg.reasoning_content || msg.reasoning || "").trim();
+    const thoughts = [nativeThought, ...sp.thoughts].filter(Boolean);
+    for (const th of thoughts) {
+      const st: ToolStep = { tool: "denken", args: {}, result: th.slice(0, 6000) };
+      steps.push(st);
+      if (!streamedLive) { opts.onThink?.(th); opts.onThinkEnd?.(); }
     }
+    if (!calls.length) {
+      return { content: sp.answer || "(keine Antwort)", steps, tokens, summary: state.summary, covered: state.covered };
+    }
+    msg.content = sp.answer;
 
     // Schutz gegen Endlosschleifen mit exakt gleichem Aufruf (kein Limit für unterschiedliche Schritte)
     const sig = JSON.stringify(calls.map((c: any) => [c.function?.name, c.function?.arguments]));
@@ -505,7 +590,9 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
       } catch (e: any) {
         result = `Fehler: ${e?.message || e}`;
       }
-      steps.push({ tool: call.function?.name, args, result: result.slice(0, 1500) });
+      const st: ToolStep = { tool: call.function?.name, args, result: result.slice(0, 1500) };
+      steps.push(st);
+      opts.onStep?.(st);
       opts.onEvent?.(`${call.function?.name}`);
       msgs.push({ role: "tool", tool_call_id: call.id, content: result.slice(0, 30_000) });
     }
