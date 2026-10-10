@@ -14,7 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { BotAvatar, ProviderBadge, ago } from "@/lib/ui";
 import { Timeline, Artifacts, type LiveItem } from "@/components/chat-parts";
 
-const Bubble = memo(function Bubble({ m, bot }: { m: Pick<Message, "role" | "content" | "steps">; bot: Bot }) {
+export const Bubble = memo(function Bubble({ m, bot }: { m: Pick<Message, "role" | "content" | "steps">; bot: Bot }) {
   const { toast } = useToast();
   if (m.role === "user") {
     return (

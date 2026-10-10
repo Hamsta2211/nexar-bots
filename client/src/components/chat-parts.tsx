@@ -58,7 +58,8 @@ export const Timeline = memo(function Timeline({ steps, live }: { steps: (ToolSt
   const items = useMemo(() => {
     const out: ({ kind: "think"; text: string; done: boolean } | { kind: "tool"; step: any } | { kind: "note"; text: string })[] = [];
     for (const s of steps as any[]) {
-      if (s.kind) out.push(s);
+      if (s.kind === "tool" && s.step?.tool === "nexar") out.push({ kind: "note", text: String(s.step.result || "") });
+      else if (s.kind) out.push(s);
       else if (s.tool === "denken") out.push({ kind: "think", text: String(s.result || ""), done: true });
       else if (s.tool === "nexar") out.push({ kind: "note", text: String(s.result || "") });
       else out.push({ kind: "tool", step: s });
