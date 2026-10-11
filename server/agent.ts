@@ -348,6 +348,25 @@ const TOOLBOX: Record<ToolId, ToolDef[]> = {
   ],
 };
 
+async function phoneBridge(action: string, payload: Record<string, unknown> = {}) {
+  const base = process.env.KDE_CONNECT_BRIDGE_URL?.replace(/\/$/, "");
+  if (!base) return "Handy-Werkzeug ist noch nicht verbunden. Richte KDE_CONNECT_BRIDGE_URL auf eine abgesicherte KDE-Connect-Brücke ein.";
+  const r = await fetch(`${base}/api/kde-connect/${encodeURIComponent(action)}`, { method: "POST", headers: { "Content-Type": "application/json", ...(process.env.KDE_CONNECT_BRIDGE_TOKEN ? { Authorization: `Bearer ${process.env.KDE_CONNECT_BRIDGE_TOKEN}` } : {}) }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`KDE-Connect-Brücke: ${r.status} ${text.slice(0, 500)}`);
+  return text.slice(0, 12_000);
+}
+
+const phoneTool = {
+  name: "use_my_phone",
+  description: "Steuert das Android-Handy über KDE Connect: Benachrichtigungen zusammenfassen, Musik pausieren/fortsetzen, eingehende Anrufe annehmen/ablehnen und einen Anruf vorbereiten. Vor jedem ausgehenden Anruf MUSST du zuerst sagen, wen du anrufen willst, und auf eine ausdrückliche Bestätigung des Nutzers warten; rufe erst danach mit confirmed=true auf.",
+  parameters: { type: "object", properties: { action: { type: "string", enum: ["notifications", "music_pause", "music_play", "call_prepare", "call", "call_answer", "call_reject", "mute_contact"] }, contact: { type: "string" }, confirmed: { type: "boolean" }, duration_seconds: { type: "number" } }, required: ["action"] },
+  run: async (args: any) => {
+    if (args.action === "call" && args.confirmed !== true) return "ANRUF NICHT AUSGEFÜHRT. Sage dem Nutzer zuerst den Kontakt und frage nach ausdrücklicher Bestätigung.";
+    return phoneBridge(String(args.action), args);
+  },
+};
+
 export const TOOL_META: Record<ToolId, { label: string; description: string }> = {
   datetime: { label: "Datum & Zeit", description: "Kennt die aktuelle Uhrzeit in jeder Zeitzone" },
   calculator: { label: "Rechner", description: "Exakte Berechnungen statt Schätzungen" },
@@ -355,6 +374,7 @@ export const TOOL_META: Record<ToolId, { label: string; description: string }> =
   web_search: { label: "Websuche", description: "Sucht aktuelle Infos über DuckDuckGo" },
   memory: { label: "Gedächtnis", description: "Merkt sich Fakten dauerhaft pro Bot" },
   linux_pc: { label: "Mein Linux-PC", description: "Führt Befehle per SSH aus und legt Skripte/Dateien auf deinem Ubuntu-PC an (als Artefakt im Chat)" },
+  phone: { label: "Mein Handy", description: "KDE-Connect-Steuerung für Benachrichtigungen, Musik und Anrufe" },
 };
 
 // ---------- Agent loop ----------
@@ -479,7 +499,7 @@ const THINK_HINT = [
 export async function runAgent(bot: Bot, history: { role: string; content: string }[], opts: RunOpts = {}) {
   const provider = bot.provider as Provider;
   const enabled: ToolId[] = JSON.parse(bot.tools || "[]");
-  const defs = enabled.flatMap((t) => TOOLBOX[t] || []);
+  const defs = enabled.flatMap((t) => t === "phone" ? [phoneTool] : (TOOLBOX[t] || []));
   const mem = enabled.includes("memory") ? (await storage.listMemories(bot.id)).slice(0, 20) : [];
 
   const sys = [

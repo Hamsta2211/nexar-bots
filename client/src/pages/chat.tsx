@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation, useParams, Link } from "wouter";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, Loader2, Mic, Plus, Trash2, Copy, Square } from "lucide-react";
+import { ArrowUp, Loader2, Mic, Plus, Trash2, Copy, Square, MessageSquare } from "lucide-react";
 import type { Bot, Conversation, Message, ToolStep } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { streamChat } from "@/lib/stream";
@@ -57,6 +57,7 @@ export default function Chat() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [mobileChatsOpen, setMobileChatsOpen] = useState(false);
   const [stream, setStream] = useState<{ text: string; items: LiveItem[] } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const botRef = useRef<number | undefined>(botId);
@@ -189,10 +190,18 @@ export default function Chat() {
           <Link href={`/voice/${bot.id}`}>
             <Button variant="outline" size="sm" data-testid="button-voice"><Mic className="mr-1.5 h-4 w-4" />Voice</Button>
           </Link>
-          <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setConvId(null)}><Plus className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setMobileChatsOpen((v) => !v)} aria-label="Chats anzeigen"><MessageSquare className="mr-1 h-4 w-4" />Chats</Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        {mobileChatsOpen && <div className="border-b border-border bg-muted/20 px-3 py-2 lg:hidden">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <Button size="sm" variant="outline" className="shrink-0" onClick={() => { setConvId(null); setMobileChatsOpen(false); }}><Plus className="mr-1 h-4 w-4" />Neu</Button>
+            {(convs || []).map((c) => <button key={c.id} onClick={() => { setConvId(c.id); setMobileChatsOpen(false); }} className={`max-w-[12rem] shrink-0 truncate rounded-md border px-2.5 py-1.5 text-xs ${c.id === convId ? "border-primary bg-primary/10" : "border-border"}`}>{c.title}</button>)}
+            {!convs?.length && <span className="text-xs text-muted-foreground">Noch keine Chats</span>}
+          </div>
+        </div>}
+
+        <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-3xl space-y-6 px-5 py-6">
             {!shown.length && !pending && (
               <div className="py-10 text-center">
@@ -239,7 +248,7 @@ export default function Chat() {
           </div>
         </div>
 
-        <div className="border-t border-border p-4">
+        <div className="border-t border-border p-3 sm:p-4">
           <div className="mx-auto flex max-w-3xl items-end gap-2 rounded-lg border border-input bg-card p-2 focus-within:ring-1 focus-within:ring-ring">
             <Textarea
               value={input}

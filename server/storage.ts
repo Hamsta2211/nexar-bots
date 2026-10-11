@@ -161,9 +161,9 @@ export class SupabaseStorage {
   async getTask(id: number) { const r = await one("select * from nb_tasks where id = $1", [id]); return r ? mapTask(r) : undefined; }
   async createTask(t: InsertTask) {
     return mapTask(await one(
-      `insert into nb_tasks(bot_id, name, prompt, interval_minutes, enabled, webhook_url, next_run_at)
-       values ($1,$2,$3,$4,$5,$6,$7) returning *`,
-      [t.botId, t.name, t.prompt, t.intervalMinutes, t.enabled ?? true, t.webhookUrl ?? "", Date.now() + t.intervalMinutes * 60_000],
+      `insert into nb_tasks(bot_id, name, prompt, interval_minutes, enabled, webhook_url, next_run_at, start_at, time_zone)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+      [t.botId, t.name, t.prompt, t.intervalMinutes, t.enabled ?? true, t.webhookUrl ?? "", t.startAt ?? Date.now(), t.startAt ?? Date.now(), t.timeZone ?? "Europe/Vienna"],
     ));
   }
   async updateTask(id: number, t: Partial<Task>) {

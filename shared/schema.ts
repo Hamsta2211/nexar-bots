@@ -4,7 +4,7 @@ import { z } from "zod";
 export const PROVIDERS = ["groq", "google"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
-export const TOOL_IDS = ["datetime", "calculator", "fetch_url", "web_search", "memory", "linux_pc"] as const;
+export const TOOL_IDS = ["datetime", "calculator", "fetch_url", "web_search", "memory", "linux_pc", "phone"] as const;
 export type ToolId = (typeof TOOL_IDS)[number];
 
 export const settings = sqliteTable("settings", {
@@ -58,6 +58,8 @@ export const tasks = sqliteTable("tasks", {
   webhookUrl: text("webhook_url").notNull().default(""),
   lastRunAt: integer("last_run_at"),
   nextRunAt: integer("next_run_at"),
+  startAt: integer("start_at"),
+  timeZone: text("time_zone").notNull().default("Europe/Vienna"),
 });
 
 export const runs = sqliteTable("runs", {
@@ -90,6 +92,8 @@ export const insertTaskSchema = z.object({
   intervalMinutes: z.number().int().min(1).max(60 * 24 * 7),
   enabled: z.boolean().default(true),
   webhookUrl: z.union([z.string().url(), z.literal("")]).default(""),
+  startAt: z.number().int().optional(),
+  timeZone: z.string().min(1).max(80).default("Europe/Vienna"),
 });
 
 export type Bot = typeof bots.$inferSelect;

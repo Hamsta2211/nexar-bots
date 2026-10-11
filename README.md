@@ -109,3 +109,19 @@ server/routes.ts     REST-API, Scheduler, Webhooks, Passwortschutz
 server/storage.ts    SQLite-Tabellen und Datenzugriff
 shared/schema.ts     Datenmodell und Validierung
 ```
+
+## Android-Handy über KDE Connect
+
+Das Werkzeug **Mein Handy** kann pro Agent aktiviert werden. Es ruft eine kleine, abgesicherte Bridge auf dem Rechner auf, der bereits mit dem Samsung-Handy über KDE Connect gekoppelt ist. Render kann nicht direkt auf ein privates WLAN-Gerät zugreifen; deshalb muss die Bridge über eine private, erreichbare Verbindung (z.B. Tailscale) veröffentlicht werden.
+
+Die Bridge stellt diese POST-Routen bereit:
+
+- `/api/kde-connect/notifications` – Benachrichtigungen abholen; die Agenten entscheiden selbst, was sie sinnvoll zusammenfassen und vorlesen.
+- `/api/kde-connect/music_pause` und `/music_play` – Mediensteuerung.
+- `/api/kde-connect/call_prepare` und `/call` – Anruf vorbereiten bzw. nach ausdrücklicher Nutzerbestätigung starten.
+- `/api/kde-connect/call_answer` und `/call_reject` – eingehende Anrufe bedienen.
+- `/api/kde-connect/mute_contact` – Kontakt zeitweise stummschalten.
+
+Die Bridge muss `Authorization: Bearer <KDE_CONNECT_BRIDGE_TOKEN>` prüfen und darf nur bekannte KDE-Connect-Geräte ansprechen. Auf Render werden `KDE_CONNECT_BRIDGE_URL` und `KDE_CONNECT_BRIDGE_TOKEN` als Secret Environment Variables hinterlegt. Ohne diese Variablen bleibt das Werkzeug bewusst deaktiviert und gibt keine falsche Erfolgsmeldung aus.
+
+Für Voice-Chat-Integrationen sollte die Bridge beim Beginn einer Agenten-Antwort `music_pause` und danach bei Ende `music_play` ausführen. Eingehende Benachrichtigungen können während einer aktiven Voice-Session gesammelt, serverseitig an den Agenten übergeben und als kurze, priorisierte Zusammenfassung vorgelesen werden. Ausgehende Anrufe werden im Agentenwerkzeug ohne `confirmed=true` niemals ausgeführt.

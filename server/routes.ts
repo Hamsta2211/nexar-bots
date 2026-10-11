@@ -14,6 +14,12 @@ const running = new Set<number>();
 
 const activeChats = new Map<number, AbortController>(); // botId -> laufender Chat
 
+function nextScheduledRun(startAt: number, intervalMinutes: number, now = Date.now()) {
+  const interval = Math.max(1, intervalMinutes) * 60_000;
+  if (startAt > now) return startAt;
+  return startAt + (Math.floor((now - startAt) / interval) + 1) * interval;
+}
+
 type ConvSummary = { upto: number; text: string };
 const getSummary = (convId: number): ConvSummary | null => {
   try { return JSON.parse(storage.getSetting(`convsum_${convId}`) || "null"); } catch { return null; }
@@ -41,7 +47,7 @@ export async function executeTask(task: Task) {
   running.add(task.id);
   const t0 = Date.now();
   const bot = await storage.getBot(task.botId);
-  await storage.updateTask(task.id, { lastRunAt: t0, nextRunAt: t0 + task.intervalMinutes * 60_000 });
+  await storage.updateTask(task.id, { lastRunAt: t0, nextRunAt: nextScheduledRun(task.startAt || t0, task.intervalMinutes, t0) });
   try {
     if (!bot) throw new Error("Bot existiert nicht mehr");
     const r = await runAgent(bot, [{ role: "user", content: task.prompt }]);
@@ -293,9 +299,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const p = insertTaskSchema.partial().safeParse(req.body);
     if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
     const patch: any = { ...p.data };
-    if (p.data.intervalMinutes || p.data.enabled) {
+    if (p.data.intervalMinutes || p.data.enabled || p.data.startAt) {
       const cur = await storage.getTask(idParam(req));
-      patch.nextRunAt = Date.now() + (p.data.intervalMinutes ?? cur?.intervalMinutes ?? 60) * 60_000;
+      const startAt = p.data.startAt ?? cur?.startAt ?? Date.now();
+      patch.startAt = startAt;
+      patch.nextRunAt = nextScheduledRun(startAt, p.data.intervalMinutes ?? cur?.intervalMinutes ?? 60);
     }
     res.json(await storage.updateTask(idParam(req), patch));
   });

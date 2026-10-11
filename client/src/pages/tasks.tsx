@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { History, Loader2, Play, Plus, Trash2, Webhook } from "lucide-react";
+import { History, Loader2, Play, Plus, Trash2, Webhook, Pencil } from "lucide-react";
 import type { Bot, Task, Run } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -20,22 +20,30 @@ const INTERVALS = [
   { v: 1440, l: "Täglich" }, { v: 10080, l: "Wöchentlich" },
 ];
 
-function TaskDialog({ open, onOpenChange, bots }: { open: boolean; onOpenChange: (o: boolean) => void; bots: Bot[] }) {
+function TaskDialog({ open, onOpenChange, bots, task }: { open: boolean; onOpenChange: (o: boolean) => void; bots: Bot[]; task?: Task }) {
   const { toast } = useToast();
   const [botId, setBotId] = useState<string>("");
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [interval, setIntervalV] = useState("1440");
   const [webhook, setWebhook] = useState("");
+  const [startAt, setStartAt] = useState("");
+
+  useEffect(() => {
+    if (open && task) {
+      setBotId(String(task.botId)); setName(task.name); setPrompt(task.prompt); setIntervalV(String(task.intervalMinutes)); setWebhook(task.webhookUrl);
+      setStartAt(new Date(task.startAt || task.nextRunAt || Date.now()).toISOString().slice(0, 16));
+    } else if (open && !task) { setBotId(""); setName(""); setPrompt(""); setIntervalV("1440"); setWebhook(""); setStartAt(new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 16)); }
+  }, [open, task]);
 
   const create = useMutation({
-    mutationFn: async () => (await apiRequest("POST", "/api/tasks", {
-      botId: Number(botId || bots[0]?.id), name, prompt, intervalMinutes: Number(interval), enabled: true, webhookUrl: webhook.trim(),
+    mutationFn: async () => (await apiRequest(task ? "PATCH" : "POST", task ? `/api/tasks/${task.id}` : "/api/tasks", {
+      botId: Number(botId || bots[0]?.id), name, prompt, intervalMinutes: Number(interval), enabled: task?.enabled ?? true, webhookUrl: webhook.trim(), startAt: startAt ? new Date(startAt).getTime() : Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     })).json(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: "Automation angelegt" });
+      toast({ title: task ? "Automation gespeichert" : "Automation angelegt" });
       setName(""); setPrompt(""); setWebhook("");
       onOpenChange(false);
     },
@@ -45,7 +53,7 @@ function TaskDialog({ open, onOpenChange, bots }: { open: boolean; onOpenChange:
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Neue Automation</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{task ? "Automation bearbeiten" : "Neue Automation"}</DialogTitle></DialogHeader>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -64,6 +72,11 @@ function TaskDialog({ open, onOpenChange, bots }: { open: boolean; onOpenChange:
             </div>
           </div>
           <div className="space-y-1.5">
+            <Label htmlFor="task-start">Startzeit</Label>
+            <Input id="task-start" type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Die Wiederholung bleibt an dieser exakten Zeit verankert.</p>
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="task-name">Name</Label>
             <Input id="task-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="z.B. Morgen-Briefing" data-testid="input-task-name" />
           </div>
@@ -79,7 +92,7 @@ function TaskDialog({ open, onOpenChange, bots }: { open: boolean; onOpenChange:
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Abbrechen</Button>
-          <Button onClick={() => create.mutate()} disabled={!name.trim() || !prompt.trim() || !bots.length || create.isPending} data-testid="button-save-task">Anlegen</Button>
+          <Button onClick={() => create.mutate()} disabled={!name.trim() || !prompt.trim() || !bots.length || create.isPending} data-testid="button-save-task">{task ? "Speichern" : "Anlegen"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -92,6 +105,7 @@ export default function Tasks() {
   const { data: tasks, isLoading } = useQuery<Task[]>({ queryKey: ["/api/tasks"], refetchInterval: 30_000, staleTime: 0 });
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
+  const [editing, setEditing] = useState<Task | undefined>();
   const { data: runs } = useQuery<Run[]>({
     queryKey: [selected ? `/api/runs?taskId=${selected}` : "/api/runs"],
     refetchInterval: 30_000, staleTime: 0,
@@ -145,6 +159,7 @@ export default function Tasks() {
                         {intervalLabel(t.intervalMinutes)} · zuletzt {ago(t.lastRunAt)} · nächster {t.enabled ? untilText(t.nextRunAt) : "pausiert"}
                       </div>
                     </button>
+                    <Button size="icon" variant="ghost" onClick={() => { setEditing(t); setOpen(true); }} aria-label="Bearbeiten"><Pencil className="h-4 w-4" /></Button>
                     <Button size="icon" variant="ghost" onClick={() => run.mutate(t.id)} disabled={run.isPending && run.variables === t.id} aria-label="Jetzt ausführen" data-testid={`button-run-${t.id}`}>
                       {run.isPending && run.variables === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                     </Button>
@@ -179,7 +194,7 @@ export default function Tasks() {
         </section>
       </div>
 
-      <TaskDialog open={open} onOpenChange={setOpen} bots={bots} />
+      <TaskDialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditing(undefined); }} bots={bots} task={editing} />
     </div>
   );
 }
