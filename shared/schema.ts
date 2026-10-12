@@ -4,6 +4,10 @@ import { z } from "zod";
 export const PROVIDERS = ["groq", "google"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
+const isIanaTimeZone = (value: string) => {
+  try { new Intl.DateTimeFormat("en-US", { timeZone: value }).format(); return true; } catch { return false; }
+};
+
 export const TOOL_IDS = ["datetime", "calculator", "fetch_url", "web_search", "memory", "linux_pc", "phone"] as const;
 export type ToolId = (typeof TOOL_IDS)[number];
 
@@ -56,6 +60,8 @@ export const tasks = sqliteTable("tasks", {
   intervalMinutes: integer("interval_minutes").notNull().default(60),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   webhookUrl: text("webhook_url").notNull().default(""),
+  deliveryType: text("delivery_type").notNull().default("webhook"),
+  notificationDeviceId: text("notification_device_id"),
   lastRunAt: integer("last_run_at"),
   nextRunAt: integer("next_run_at"),
   startAt: integer("start_at"),
@@ -92,8 +98,14 @@ export const insertTaskSchema = z.object({
   intervalMinutes: z.number().int().min(1).max(60 * 24 * 7),
   enabled: z.boolean().default(true),
   webhookUrl: z.union([z.string().url(), z.literal("")]).default(""),
+  deliveryType: z.enum(["webhook", "nexar_notification"]).default("webhook"),
+  notificationDeviceId: z.string().min(8).max(120).nullable().optional(),
   startAt: z.number().int().optional(),
-  timeZone: z.string().min(1).max(80).default("Europe/Vienna"),
+  timeZone: z.string().min(1).max(80).refine(isIanaTimeZone, "Ungültige IANA-Zeitzone").default("Europe/Vienna"),
+}).superRefine((task, ctx) => {
+  if (task.deliveryType === "nexar_notification" && !task.notificationDeviceId) {
+    ctx.addIssue({ code: "custom", path: ["notificationDeviceId"], message: "Android-Gerät für die Nexar-Bots-Benachrichtigung wählen" });
+  }
 });
 
 export type Bot = typeof bots.$inferSelect;
@@ -143,4 +155,16 @@ export type ModelCatalog = {
   fetchedAt: number;
   live: boolean;
   error: string | null;
+};
+
+export type NotificationDevice = {
+  id: string;
+  userId: number;
+  installationId: string;
+  displayName: string;
+  platform: string;
+  fcmPushToken: string | null;
+  createdAt: number;
+  updatedAt: number;
+  lastSeenAt: number | null;
 };

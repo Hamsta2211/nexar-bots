@@ -219,7 +219,7 @@ function assertPublicUrl(raw: string) {
 const MATH_LIST = Object.getOwnPropertyNames(Math);
 const MATH_WORDS = new Set(MATH_LIST);
 
-const TOOLBOX: Record<ToolId, ToolDef[]> = {
+const TOOLBOX: Partial<Record<ToolId, ToolDef[]>> = {
   datetime: [{
     name: "get_current_time",
     description: "Liefert aktuelles Datum und Uhrzeit. Optional mit IANA-Zeitzone, z.B. Europe/Vienna.",
@@ -406,6 +406,7 @@ export type RunOpts = {
   summary?: string;                                        // gespeicherte Zusammenfassung älterer Nachrichten
   onCompact?: (summary: string, coveredHistory: number) => void; // wie viele History-Nachrichten jetzt in der Zusammenfassung stecken
   signal?: AbortSignal;
+  systemAddendum?: string;                                 // nicht vom Nutzer veränderbare Laufzeitregeln, z.B. Ausgabevertrag
   onEvent?: (text: string) => void;
   onToken?: (text: string) => void;                        // wenn gesetzt: Antwort wird live gestreamt
   onThink?: (text: string) => void;                        // Gedanken (Text wächst stückweise)
@@ -505,6 +506,7 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
   const sys = [
     bot.systemPrompt || `Du bist ${bot.name}, ein hilfreicher KI-Agent.`,
     `Aktuelles Datum: ${new Date().toISOString().slice(0, 10)}.`,
+    opts.systemAddendum || "",
     THINK_HINT,
     defs.length ? "Nutze deine Werkzeuge aktiv und so oft wie nötig, bis die Aufgabe wirklich erledigt ist. Antworte danach klar und knapp." : "",
     mem.length ? `Bekannte Notizen:\n${mem.map((m) => `- ${m.content}`).join("\n")}` : "",

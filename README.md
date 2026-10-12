@@ -9,6 +9,7 @@ Selbst gehostete Agenten-Plattform. Du bringst deine eigenen API-Keys mit (Groq 
 - **Werkzeuge (Function Calling):** Datum & Zeit, Rechner, Webseiten lesen, Websuche (DuckDuckGo mit Wikipedia-Fallback), Gedächtnis
 - **Chat** mit Verläufen, Markdown, sichtbaren Werkzeug-Aufrufen
 - **Automationen:** Bots führen Aufträge nach Zeitplan aus (15 Min. bis wöchentlich), Ergebnis optional per Webhook an Discord, Slack oder eigene URL
+- **Nexar-Bots-Benachrichtigung:** eigener Automationskanal für Android mit sicherer Einmal-Kopplung, animierter Vollbildanzeige, immer sichtbarem Ausführungsdatum/-zeitpunkt, scrollbar langen Texten und schließbarer Anzeige. Der Bot liefert ein validiertes Layout mit Überschriften, Texten, Listen, Kennzahlen und wiederverwendbaren Widgets.
 - **Dashboard** mit Läufen, Tokens, Fehlern und Uptime
 - **BYOK:** Keys werden nur auf deinem Server gespeichert, Modell-Liste wird live von deinem Key geladen
 - **Mein PC (SSH):** eigenen Ubuntu-PC verbinden, Live-Status (CPU, RAM, Disk), Web-Terminal, Bot-Werkzeug „Mein Linux-PC“ und Admin-Bot „Tux“
@@ -125,3 +126,11 @@ Die Bridge stellt diese POST-Routen bereit:
 Die Bridge muss `Authorization: Bearer <KDE_CONNECT_BRIDGE_TOKEN>` prüfen und darf nur bekannte KDE-Connect-Geräte ansprechen. Auf Render werden `KDE_CONNECT_BRIDGE_URL` und `KDE_CONNECT_BRIDGE_TOKEN` als Secret Environment Variables hinterlegt. Ohne diese Variablen bleibt das Werkzeug bewusst deaktiviert und gibt keine falsche Erfolgsmeldung aus.
 
 Für Voice-Chat-Integrationen sollte die Bridge beim Beginn einer Agenten-Antwort `music_pause` und danach bei Ende `music_play` ausführen. Eingehende Benachrichtigungen können während einer aktiven Voice-Session gesammelt, serverseitig an den Agenten übergeben und als kurze, priorisierte Zusammenfassung vorgelesen werden. Ausgehende Anrufe werden im Agentenwerkzeug ohne `confirmed=true` niemals ausgeführt.
+
+## Nexar-Bots-Benachrichtigung für Android
+
+In **Automationen** ist unter **Ziel** der Punkt **Nexar-Bots-Benachrichtigung** verfügbar. Dort wird ein kurzlebiger Kopplungscode erstellt und in der nativen Android-App unter `mobile/nexar-notification` zusammen mit der HTTPS-Adresse dieser Nexar-Instanz eingegeben. Die App erhält danach einen eigenen, nur gehasht gespeicherten Gerätezugang.
+
+Bei jedem Lauf übergibt Nexar alle zu dieser Automation gespeicherten Widgets in den Laufzeit-Systemprompt des Bots. Der Bot kann Widgets mit stabilen Schlüsseln anlegen, aktualisieren oder entfernen. Server und App prüfen das JSON-Format defensiv; bei nicht strukturiertem Text werden Überschriften, Listen, Zitate und Kennzahlen automatisch erkannt. Ereignisse und Widget-Snapshots liegen in Supabase, sodass die App auch nach einer späteren Entsperrung noch die vollständige Anzeige zeigt.
+
+Für Push-Zustellung wird in Android Studio eine Firebase-Datei `mobile/nexar-notification/app/google-services.json` sowie auf Render das Secret `FIREBASE_SERVICE_ACCOUNT_JSON` benötigt. Ohne Firebase bleibt die manuelle und 15-minütige Hintergrund-Synchronisierung aktiv. Details zum Protokoll und Sicherheitsmodell: [`docs/nexar-bots-benachrichtigung.md`](docs/nexar-bots-benachrichtigung.md).

@@ -8,6 +8,9 @@ import { insertBotSchema, insertTaskSchema, PROVIDERS } from "@shared/schema";
 import type { Provider, Task, Stats, KeyStatus } from "@shared/schema";
 import { requireAuth, registerAuthRoutes } from "./auth";
 import { getSshConfig, saveSshConfig, publicSshConfig, clearSshSecrets, sshExec, systemInfo, generateKey } from "./ssh";
+import { buildNotificationSystemPrompt, parseAutomationNotification } from "./notification-format";
+import { notificationStore } from "./notification-store";
+import { registerNotificationRoutes, sendNotificationPush } from "./notifications";
 
 const startedAt = Date.now();
 const running = new Set<number>();
@@ -50,9 +53,27 @@ export async function executeTask(task: Task) {
   await storage.updateTask(task.id, { lastRunAt: t0, nextRunAt: nextScheduledRun(task.startAt || t0, task.intervalMinutes, t0) });
   try {
     if (!bot) throw new Error("Bot existiert nicht mehr");
-    const r = await runAgent(bot, [{ role: "user", content: task.prompt }]);
+    const notificationDeviceId = task.deliveryType === "nexar_notification" ? task.notificationDeviceId : null;
+    if (task.deliveryType === "nexar_notification" && !notificationDeviceId) {
+      throw new Error("Nexar-Bots-Benachrichtigung pausiert: Das gekoppelte Android-Gerät wurde entfernt. Wähle in der Automation ein neues Gerät.");
+    }
+    const existingWidgets = notificationDeviceId ? await notificationStore.listWidgets(task.id, notificationDeviceId) : [];
+    const r = await runAgent(bot, [{ role: "user", content: task.prompt }], {
+      systemAddendum: notificationDeviceId ? buildNotificationSystemPrompt(existingWidgets, task.timeZone || "Europe/Vienna") : undefined,
+    });
+    if (notificationDeviceId) {
+      const formatted = parseAutomationNotification(r.content, task.name);
+      const event = await notificationStore.persistAutomationNotification({
+        deviceId: notificationDeviceId, taskId: task.id, botId: bot.id, title: formatted.title, formatted,
+        occurredAt: new Date(t0).toISOString(), timeZone: task.timeZone || "Europe/Vienna",
+        source: { taskName: task.name, botName: bot.name },
+      });
+      const device = await notificationStore.getDevice(notificationDeviceId);
+      if (device) await sendNotificationPush(device, event);
+    } else {
+      await postWebhook(task.webhookUrl, bot.name, task.name, r.content);
+    }
     await storage.addRun({ taskId: task.id, botId: bot.id, source: "task", status: "ok", output: r.content, tokens: r.tokens, durationMs: Date.now() - t0, startedAt: t0 });
-    await postWebhook(task.webhookUrl, bot.name, task.name, r.content);
   } catch (e: any) {
     await storage.addRun({ taskId: task.id, botId: task.botId, source: "task", status: "error", output: String(e?.message || e), tokens: 0, durationMs: Date.now() - t0, startedAt: t0 });
   } finally {
@@ -74,10 +95,16 @@ function startScheduler() {
 
 const idParam = (req: Request) => Number(req.params.id);
 
+async function ownsNotificationDevice(userId: number, deviceId: string | null | undefined) {
+  if (!deviceId) return false;
+  return (await notificationStore.listDevices(userId)).some((device) => device.id === deviceId);
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   await storage.init();
   app.use("/api", requireAuth);
   registerAuthRoutes(app);
+  registerNotificationRoutes(app);
 
   app.get("/api/health", async (_req, res) => res.json({ ok: true, uptimeSec: Math.round((Date.now() - startedAt) / 1000) }));
   // ---- Keys ----
@@ -293,14 +320,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/tasks", async (req, res) => {
     const p = insertTaskSchema.safeParse(req.body);
     if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
+    if (p.data.deliveryType === "nexar_notification" && !(await ownsNotificationDevice(req.user!.id, p.data.notificationDeviceId))) {
+      return res.status(400).json({ message: "Das gewählte Android-Gerät ist nicht gekoppelt." });
+    }
     res.json(await storage.createTask(p.data));
   });
   app.patch("/api/tasks/:id", async (req, res) => {
     const p = insertTaskSchema.partial().safeParse(req.body);
     if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
     const patch: any = { ...p.data };
+    const cur = await storage.getTask(idParam(req));
+    if (!cur) return res.status(404).json({ message: "Automation nicht gefunden" });
+    const deliveryType = p.data.deliveryType ?? cur.deliveryType;
+    const notificationDeviceId = p.data.notificationDeviceId ?? cur.notificationDeviceId;
+    if (deliveryType === "nexar_notification" && !(await ownsNotificationDevice(req.user!.id, notificationDeviceId))) {
+      return res.status(400).json({ message: "Das gewählte Android-Gerät ist nicht gekoppelt." });
+    }
     if (p.data.intervalMinutes || p.data.enabled || p.data.startAt) {
-      const cur = await storage.getTask(idParam(req));
       const startAt = p.data.startAt ?? cur?.startAt ?? Date.now();
       patch.startAt = startAt;
       patch.nextRunAt = nextScheduledRun(startAt, p.data.intervalMinutes ?? cur?.intervalMinutes ?? 60);

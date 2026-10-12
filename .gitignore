@@ -3,3 +3,7 @@ dist
 data
 *.db*
 .env
+mobile/nexar-notification/.gradle
+mobile/nexar-notification/build
+mobile/nexar-notification/app/build
+mobile/nexar-notification/app/google-services.json

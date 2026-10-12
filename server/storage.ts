@@ -63,7 +63,8 @@ const mapMsg = (r: any): Message => ({
 const mapMem = (r: any): Memory => ({ id: r.id, botId: r.bot_id, content: r.content, createdAt: r.created_at });
 const mapTask = (r: any): Task => ({
   id: r.id, botId: r.bot_id, name: r.name, prompt: r.prompt, intervalMinutes: r.interval_minutes, enabled: r.enabled,
-  webhookUrl: r.webhook_url, lastRunAt: r.last_run_at, nextRunAt: r.next_run_at,
+  webhookUrl: r.webhook_url, deliveryType: r.delivery_type || "webhook", notificationDeviceId: r.notification_device_id,
+  lastRunAt: r.last_run_at, nextRunAt: r.next_run_at, startAt: r.start_at, timeZone: r.time_zone || "Europe/Vienna",
 });
 const mapRun = (r: any): Run => ({
   id: r.id, taskId: r.task_id, botId: r.bot_id, source: r.source, status: r.status, output: r.output,
@@ -161,15 +162,16 @@ export class SupabaseStorage {
   async getTask(id: number) { const r = await one("select * from nb_tasks where id = $1", [id]); return r ? mapTask(r) : undefined; }
   async createTask(t: InsertTask) {
     return mapTask(await one(
-      `insert into nb_tasks(bot_id, name, prompt, interval_minutes, enabled, webhook_url, next_run_at, start_at, time_zone)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
-      [t.botId, t.name, t.prompt, t.intervalMinutes, t.enabled ?? true, t.webhookUrl ?? "", t.startAt ?? Date.now(), t.startAt ?? Date.now(), t.timeZone ?? "Europe/Vienna"],
+      `insert into nb_tasks(bot_id, name, prompt, interval_minutes, enabled, webhook_url, delivery_type, notification_device_id, next_run_at, start_at, time_zone)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
+      [t.botId, t.name, t.prompt, t.intervalMinutes, t.enabled ?? true, t.webhookUrl ?? "", t.deliveryType ?? "webhook", t.notificationDeviceId ?? null, t.startAt ?? Date.now(), t.startAt ?? Date.now(), t.timeZone ?? "Europe/Vienna"],
     ));
   }
   async updateTask(id: number, t: Partial<Task>) {
     const cols: Record<string, string> = {
       botId: "bot_id", name: "name", prompt: "prompt", intervalMinutes: "interval_minutes", enabled: "enabled",
-      webhookUrl: "webhook_url", lastRunAt: "last_run_at", nextRunAt: "next_run_at",
+      webhookUrl: "webhook_url", deliveryType: "delivery_type", notificationDeviceId: "notification_device_id",
+      lastRunAt: "last_run_at", nextRunAt: "next_run_at", startAt: "start_at", timeZone: "time_zone",
     };
     const sets: string[] = [], vals: any[] = [];
     for (const [k, v] of Object.entries(t)) if (cols[k] && v !== undefined) { vals.push(v); sets.push(`${cols[k]} = $${vals.length}`); }

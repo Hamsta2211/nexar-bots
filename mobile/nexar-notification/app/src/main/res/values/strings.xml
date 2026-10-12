@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Nexar-Bots-Benachrichtigung</string>
+    <string name="notification_channel_name">Nexar-Bots-Alerts</string>
+    <string name="notification_channel_description">Vollbild-Benachrichtigungen von Nexar-Bots-Automationen</string>
+</resources>
