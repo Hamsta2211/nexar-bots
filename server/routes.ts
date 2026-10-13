@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { runAgent, listModels, TOOL_META } from "./agent";
 import { keyInfos, addKey, removeKey, moveKey, allKeys, resetKeyState } from "./keys";
 import { getCatalog, invalidateCatalog, startCatalogRefresher, DEFAULT_MODEL } from "./models";
-import { insertBotSchema, insertTaskSchema, PROVIDERS } from "@shared/schema";
+import { insertBotSchema, insertTaskSchema, updateTaskSchema, PROVIDERS } from "@shared/schema";
 import type { Provider, Task, Stats, KeyStatus } from "@shared/schema";
 import { requireAuth, registerAuthRoutes } from "./auth";
 import { getSshConfig, saveSshConfig, publicSshConfig, clearSshSecrets, sshExec, systemInfo, generateKey } from "./ssh";
@@ -326,7 +326,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json(await storage.createTask(p.data));
   });
   app.patch("/api/tasks/:id", async (req, res) => {
-    const p = insertTaskSchema.partial().safeParse(req.body);
+    const p = updateTaskSchema.safeParse(req.body);
     if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
     const patch: any = { ...p.data };
     const cur = await storage.getTask(idParam(req));

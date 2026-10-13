@@ -91,7 +91,7 @@ export const insertBotSchema = z.object({
   tools: z.string().default("[]"),
 });
 
-export const insertTaskSchema = z.object({
+export const taskFieldsSchema = z.object({
   botId: z.number().int(),
   name: z.string().min(1, "Name fehlt"),
   prompt: z.string().min(1, "Auftrag fehlt"),
@@ -102,11 +102,15 @@ export const insertTaskSchema = z.object({
   notificationDeviceId: z.string().min(8).max(120).nullable().optional(),
   startAt: z.number().int().optional(),
   timeZone: z.string().min(1).max(80).refine(isIanaTimeZone, "Ungültige IANA-Zeitzone").default("Europe/Vienna"),
-}).superRefine((task, ctx) => {
+});
+
+export const insertTaskSchema = taskFieldsSchema.superRefine((task, ctx) => {
   if (task.deliveryType === "nexar_notification" && !task.notificationDeviceId) {
     ctx.addIssue({ code: "custom", path: ["notificationDeviceId"], message: "Android-Gerät für die Nexar-Bots-Benachrichtigung wählen" });
   }
 });
+
+export const updateTaskSchema = taskFieldsSchema.partial();
 
 export type Bot = typeof bots.$inferSelect;
 export type InsertBot = z.infer<typeof insertBotSchema>;
