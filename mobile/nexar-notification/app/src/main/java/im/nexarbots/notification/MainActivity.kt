@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,6 +42,7 @@ import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -52,6 +54,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -117,6 +120,7 @@ private fun NexarNotificationApp(requestedEventId: String?) {
     val cache = remember { EventCache(context) }
     var credentials by remember { mutableStateOf(credentialsStore.get()) }
     var event by remember { mutableStateOf<MobileEvent?>(requestedEventId?.let(cache::get) ?: cache.pending()) }
+    var reminders by remember { mutableStateOf(emptyList<AutomationReminder>()) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -129,10 +133,28 @@ private fun NexarNotificationApp(requestedEventId: String?) {
         event = cache.get(id)
         if (event == null && credentials != null) runCatching { NexarApi().event(credentials!!, id) }.onSuccess { loaded -> cache.save(loaded); event = loaded }
     }
+    LaunchedEffect(credentials?.deviceId) {
+        val current = credentials ?: return@LaunchedEffect
+        runCatching { NexarApi().reminders(current) }.onSuccess { reminders = it }
+    }
+    val removeReminder: (String) -> Unit = { reminderId ->
+        scope.launch {
+            val current = credentials ?: return@launch
+            runCatching { NexarApi().deleteReminder(current, reminderId) }
+                .onSuccess {
+                    reminders = reminders.filterNot { it.id == reminderId }
+                    event = event?.let { currentEvent ->
+                        currentEvent.copy(payload = currentEvent.payload.copy(reminders = currentEvent.payload.reminders.filterNot { it.id == reminderId }))
+                            .also { cache.save(it) }
+                    }
+                }
+                .onFailure { error = it.message ?: "Erinnerung konnte nicht gelöscht werden" }
+        }
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = NexarBackground) {
         AnimatedContent(targetState = event != null, label = "screen") { hasEvent ->
-            if (hasEvent) NotificationScreen(event = event!!, onClose = {
+            if (hasEvent) NotificationScreen(event = event!!, onDeleteReminder = removeReminder, onClose = {
                 val closingEvent = event ?: return@NotificationScreen
                 scope.launch {
                     credentials?.let { runCatching { NexarApi().dismiss(it, closingEvent.id) } }
@@ -143,11 +165,18 @@ private fun NexarNotificationApp(requestedEventId: String?) {
             else HomeScreen(
                 busy = busy,
                 error = error,
+                reminders = reminders,
+                onDeleteReminder = removeReminder,
                 onRefresh = {
                     scope.launch {
                         busy = true; error = null
-                        runCatching { NexarApi().pending(credentials!!) }.onSuccess { events ->
-                            events.reversed().forEach(cache::save); event = events.firstOrNull() ?: cache.pending()
+                        runCatching {
+                            val api = NexarApi()
+                            val nextReminders = api.reminders(credentials!!)
+                            val nextEvents = api.pending(credentials!!)
+                            reminders = nextReminders
+                            nextEvents.reversed().forEach(cache::save)
+                            event = nextEvents.firstOrNull() ?: cache.pending()
                         }.onFailure { error = it.message ?: "Keine Verbindung zur Nexar-Instanz" }
                         busy = false
                     }
@@ -191,23 +220,43 @@ private fun PairingScreen(onPaired: (DeviceCredentials) -> Unit) {
 }
 
 @Composable
-private fun HomeScreen(busy: Boolean, error: String?, onRefresh: () -> Unit, onDisconnect: () -> Unit) {
+private fun HomeScreen(busy: Boolean, error: String?, reminders: List<AutomationReminder>, onDeleteReminder: (String) -> Unit, onRefresh: () -> Unit, onDisconnect: () -> Unit) {
     val context = LocalContext.current
     val notificationManager = context.getSystemService(NotificationManager::class.java)
+    var remindersOpen by remember { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Icon(Icons.Outlined.NotificationsActive, null, tint = NexarGreen, modifier = Modifier.size(44.dp)); Spacer(Modifier.height(16.dp))
         Text("Bereit für Nexar-Bots", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Neue Automationsmeldungen erscheinen hier im Vollbild.", color = Color(0xFFB5C3B9), modifier = Modifier.padding(top = 8.dp))
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }, modifier = Modifier.padding(top = 18.dp)) { Text("Benachrichtigungen erlauben") }
         if (Build.VERSION.SDK_INT >= 34 && !notificationManager.canUseFullScreenIntent()) OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, Uri.parse("package:${context.packageName}"))) }, modifier = Modifier.padding(top = 18.dp)) { Text("Vollbild-Berechtigung aktivieren") }
+        OutlinedButton(onClick = { remindersOpen = true }, modifier = Modifier.padding(top = 14.dp)) { Text("Erinnerungen · ${reminders.size}") }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 16.dp)) }
         Spacer(Modifier.height(24.dp)); Button(onClick = onRefresh, enabled = !busy) { if (busy) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Outlined.Refresh, null); Spacer(Modifier.width(8.dp)); Text("Jetzt synchronisieren") }
         OutlinedButton(onClick = onDisconnect, modifier = Modifier.padding(top = 10.dp)) { Text("Gerät trennen") }
     }
+    if (remindersOpen) AlertDialog(
+        onDismissRequest = { remindersOpen = false },
+        title = { Text("Erinnerungen") },
+        text = {
+            if (reminders.isEmpty()) Text("Für dieses Gerät gibt es keine Erinnerungen.")
+            else LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                items(reminders, key = { it.id }) { reminder ->
+                    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                        Text(reminder.content, color = NexarText)
+                        Text(reminder.taskName, color = Color(0xFFB5C3B9), style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
+                        TextButton(onClick = { onDeleteReminder(reminder.id) }) { Text("Löschen", color = MaterialTheme.colorScheme.error) }
+                        HorizontalDivider(color = Color(0xFF2A3930))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { remindersOpen = false }) { Text("Fertig") } },
+    )
 }
 
 @Composable
-private fun NotificationScreen(event: MobileEvent, onClose: () -> Unit) {
+private fun NotificationScreen(event: MobileEvent, onDeleteReminder: (String) -> Unit, onClose: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     LaunchedEffect(event.id) { CredentialStore(context).get()?.let { runCatching { NexarApi().seen(it, event.id) } } }
@@ -219,6 +268,15 @@ private fun NotificationScreen(event: MobileEvent, onClose: () -> Unit) {
             items(blocks) { block -> ContentBlockCard(block) }
             if (event.payload.widgets.isNotEmpty()) item { Text("WIDGETS", style = MaterialTheme.typography.labelMedium, color = NexarGreen, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(top = 8.dp)) }
             items(event.payload.widgets) { widget -> WidgetCard(widget) }
+            if (event.payload.reminders.isNotEmpty()) item { Text("ERINNERUNGEN", style = MaterialTheme.typography.labelMedium, color = NexarGreen, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(top = 8.dp)) }
+            items(event.payload.reminders, key = { it.id }) { reminder ->
+                Card(colors = CardDefaults.cardColors(containerColor = NexarSurface), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(reminder.content, color = NexarText, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { onDeleteReminder(reminder.id) }) { Text("Löschen", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
         }
         Button(onClick = onClose, modifier = Modifier.fillMaxWidth().padding(20.dp), colors = ButtonDefaults.buttonColors(containerColor = NexarGreen, contentColor = NexarBackground)) { Text("Schließen", fontWeight = FontWeight.Bold) }
     }

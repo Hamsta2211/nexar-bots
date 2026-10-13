@@ -22,6 +22,7 @@ export type NotificationEvent = {
   id: string; deviceId: string; taskId: number | null; botId: number | null; title: string;
   payload: Record<string, unknown>; createdAt: number; pushSentAt: number | null; seenAt: number | null; dismissedAt: number | null;
 };
+export type TaskReminder = { id: string; taskId: number; taskName: string; content: string; createdAt: number; updatedAt: number };
 
 const mapDevice = (r: any): NotificationDevice => ({
   id: r.id, userId: Number(r.user_id), installationId: r.installation_id, displayName: r.display_name,
@@ -46,6 +47,99 @@ function pairingCode() {
 }
 
 export const notificationStore = {
+  async taskExists(taskId: number) {
+    return !!(await one<any>("select id from nb_tasks where id = $1", [taskId]));
+  },
+
+  async listTaskReminders(taskId?: number): Promise<TaskReminder[]> {
+    const rows = taskId
+      ? await many<any>("select r.*, t.name as task_name from nb_task_reminders r join nb_tasks t on t.id = r.task_id where r.task_id = $1 order by r.created_at desc, r.id", [taskId])
+      : await many<any>("select r.*, t.name as task_name from nb_task_reminders r join nb_tasks t on t.id = r.task_id order by r.created_at desc, r.id");
+    return rows.map((r) => ({ id: r.id, taskId: Number(r.task_id), taskName: r.task_name, content: r.content, createdAt: Number(r.created_at), updatedAt: Number(r.updated_at) }));
+  },
+
+  async addTaskReminder(taskId: number, content: string): Promise<TaskReminder> {
+    const t = now();
+    const r = await one<any>(
+      `insert into nb_task_reminders(id, task_id, content, created_at, updated_at)
+       values ($1,$2,$3,$4,$4) returning *`,
+      [id("reminder"), taskId, content.trim(), t],
+    );
+    const task = await one<any>("select name from nb_tasks where id = $1", [taskId]);
+    return { id: r.id, taskId: Number(r.task_id), taskName: task?.name || "Automation", content: r.content, createdAt: Number(r.created_at), updatedAt: Number(r.updated_at) };
+  },
+
+  async deleteTaskReminder(reminderId: string, taskId?: number): Promise<boolean> {
+    const result = await pool.query(
+      `with deleted as (
+         delete from nb_task_reminders
+         where id = $1 and ($2::bigint is null or task_id = $2)
+         returning id, task_id
+       ), updated_events as (
+         update nb_notification_events e
+         set payload = jsonb_set(
+           e.payload,
+           '{reminders}',
+           coalesce(
+             (select jsonb_agg(item) from jsonb_array_elements(e.payload->'reminders') item where item->>'id' <> deleted.id),
+             '[]'::jsonb
+           ),
+           true
+         )
+         from deleted
+         where e.task_id = deleted.task_id
+           and jsonb_typeof(e.payload->'reminders') = 'array'
+           and e.payload->'reminders' @> jsonb_build_array(jsonb_build_object('id', deleted.id))
+         returning e.id
+       )
+       select deleted.id from deleted cross join (select count(*) from updated_events) synced`,
+      [reminderId, taskId ?? null],
+    );
+    return (result.rowCount || 0) > 0;
+  },
+
+  async listDeviceReminders(deviceId: string): Promise<TaskReminder[]> {
+    const rows = await many<any>(
+      `select r.*, t.name as task_name from nb_task_reminders r join nb_tasks t on t.id = r.task_id
+       where t.delivery_type = 'nexar_notification' and t.notification_device_id = $1
+       order by r.created_at desc, r.id`,
+      [deviceId],
+    );
+    return rows.map((r) => ({ id: r.id, taskId: Number(r.task_id), taskName: r.task_name, content: r.content, createdAt: Number(r.created_at), updatedAt: Number(r.updated_at) }));
+  },
+
+  async deleteDeviceReminder(deviceId: string, reminderId: string): Promise<boolean> {
+    const result = await pool.query(
+      `with deleted as (
+         delete from nb_task_reminders r
+         using nb_tasks t
+         where r.task_id = t.id and r.id = $1
+           and t.delivery_type = 'nexar_notification' and t.notification_device_id = $2
+         returning r.id, r.task_id
+       ), updated_events as (
+         update nb_notification_events e
+         set payload = jsonb_set(
+           e.payload,
+           '{reminders}',
+           coalesce(
+             (select jsonb_agg(item) from jsonb_array_elements(e.payload->'reminders') item where item->>'id' <> deleted.id),
+             '[]'::jsonb
+           ),
+           true
+         )
+         from deleted
+         where e.task_id = deleted.task_id
+           and e.device_id = $2
+           and jsonb_typeof(e.payload->'reminders') = 'array'
+           and e.payload->'reminders' @> jsonb_build_array(jsonb_build_object('id', deleted.id))
+         returning e.id
+       )
+       select deleted.id from deleted cross join (select count(*) from updated_events) synced`,
+      [reminderId, deviceId],
+    );
+    return (result.rowCount || 0) > 0;
+  },
+
   async createPairing(userId: number) {
     const code = pairingCode();
     const createdAt = now();
@@ -157,9 +251,14 @@ export const notificationStore = {
         "select * from nb_notification_widgets where task_id = $1 and device_id = $2 order by updated_at, widget_key",
         [input.taskId, input.deviceId],
       )).rows.map(mapWidget);
+      const reminders = (await client.query<any>(
+        "select id, content, created_at from nb_task_reminders where task_id = $1 order by created_at desc, id",
+        [input.taskId],
+      )).rows.map((r) => ({ id: r.id, content: r.content, createdAt: Number(r.created_at) }));
       const payload = {
         ...input.formatted,
         widgets: widgets.map(({ key, kind, title, data }) => ({ key, kind, title, data })),
+        reminders,
         occurredAt: input.occurredAt,
         timeZone: input.timeZone,
         source: input.source,

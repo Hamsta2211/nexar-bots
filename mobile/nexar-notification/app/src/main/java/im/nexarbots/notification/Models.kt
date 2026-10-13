@@ -20,6 +20,7 @@ data class NotificationPayload(
     val summary: String = "",
     val blocks: List<ContentBlock> = emptyList(),
     val widgets: List<NotificationWidget> = emptyList(),
+    val reminders: List<AutomationReminder> = emptyList(),
     val occurredAt: String = "",
     val timeZone: String = "Europe/Vienna",
     val source: SourceInfo? = null,
@@ -65,3 +66,16 @@ data class DeviceCredentials(
     val deviceId: String,
     val deviceToken: String,
 )
+
+@Serializable
+data class AutomationReminder(
+    val id: String,
+    val content: String,
+    val taskId: Long = 0,
+    val taskName: String = "",
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0,
+)
+
+@Serializable
+data class RemindersResponse(val reminders: List<AutomationReminder> = emptyList())

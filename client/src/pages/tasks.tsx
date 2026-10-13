@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { BellRing, Check, Copy, History, Link2, Loader2, Pencil, Play, Plus, Smartphone, Trash2, Webhook } from "lucide-react";
+import { BellRing, Check, Copy, History, Link2, ListTodo, Loader2, Pencil, Play, Plus, Smartphone, Trash2, Webhook } from "lucide-react";
 import type { Bot, NotificationDevice, Run, Task } from "@shared/schema";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { PageHeader, BotAvatar, ago, untilText, intervalLabel } from "@/lib/ui";
+import { RemindersPanel, TaskRemindersDialog } from "@/components/task-reminders";
 
 const INTERVALS = [
   { v: 15, l: "Alle 15 Minuten" }, { v: 30, l: "Alle 30 Minuten" }, { v: 60, l: "Stündlich" },
@@ -26,7 +27,7 @@ function formatExpiry(expiresAt: number) {
   return new Intl.DateTimeFormat("de-DE", { hour: "2-digit", minute: "2-digit" }).format(expiresAt);
 }
 
-function TaskDialog({ open, onOpenChange, bots, task }: { open: boolean; onOpenChange: (o: boolean) => void; bots: Bot[]; task?: Task }) {
+function TaskDialog({ open, onOpenChange, bots, task, onManageReminders }: { open: boolean; onOpenChange: (o: boolean) => void; bots: Bot[]; task?: Task; onManageReminders: (task: Task) => void }) {
   const { toast } = useToast();
   const [botId, setBotId] = useState<string>("");
   const [name, setName] = useState("");
@@ -36,6 +37,9 @@ function TaskDialog({ open, onOpenChange, bots, task }: { open: boolean; onOpenC
   const [deliveryType, setDeliveryType] = useState<"webhook" | "nexar_notification">("webhook");
   const [notificationDeviceId, setNotificationDeviceId] = useState("");
   const [startAt, setStartAt] = useState("");
+  const [reminderPanelOpen, setReminderPanelOpen] = useState(false);
+  const [draftReminder, setDraftReminder] = useState("");
+  const [draftReminders, setDraftReminders] = useState<string[]>([]);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   const [copied, setCopied] = useState(false);
   const { data: devices = [], refetch: refetchDevices } = useQuery<NotificationDevice[]>({
@@ -51,6 +55,7 @@ function TaskDialog({ open, onOpenChange, bots, task }: { open: boolean; onOpenC
     } else if (open && !task) {
       setBotId(""); setName(""); setPrompt(""); setIntervalV("1440"); setWebhook(""); setDeliveryType("webhook");
       setNotificationDeviceId(""); setStartAt(new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 16));
+      setReminderPanelOpen(false); setDraftReminder(""); setDraftReminders([]);
     }
     if (!open) { setPairing(null); setCopied(false); }
   }, [open, task]);
@@ -68,16 +73,24 @@ function TaskDialog({ open, onOpenChange, bots, task }: { open: boolean; onOpenC
   };
 
   const create = useMutation({
-    mutationFn: async () => (await apiRequest(task ? "PATCH" : "POST", task ? `/api/tasks/${task.id}` : "/api/tasks", {
-      botId: Number(botId || bots[0]?.id), name, prompt, intervalMinutes: Number(interval), enabled: task?.enabled ?? true,
-      webhookUrl: deliveryType === "webhook" ? webhook.trim() : "", deliveryType,
-      notificationDeviceId: deliveryType === "nexar_notification" ? notificationDeviceId || null : null,
-      startAt: startAt ? new Date(startAt).getTime() : Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    })).json(),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const response = await apiRequest(task ? "PATCH" : "POST", task ? `/api/tasks/${task.id}` : "/api/tasks", {
+        botId: Number(botId || bots[0]?.id), name, prompt, intervalMinutes: Number(interval), enabled: task?.enabled ?? true,
+        webhookUrl: deliveryType === "webhook" ? webhook.trim() : "", deliveryType,
+        notificationDeviceId: deliveryType === "nexar_notification" ? notificationDeviceId || null : null,
+        startAt: startAt ? new Date(startAt).getTime() : Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+      const savedTask = await response.json() as Task;
+      const results = !task && draftReminders.length
+        ? await Promise.allSettled(draftReminders.map((content) => apiRequest("POST", `/api/tasks/${savedTask.id}/reminders`, { content })))
+        : [];
+      return { savedTask, reminderFailures: results.filter((result) => result.status === "rejected").length };
+    },
+    onSuccess: ({ reminderFailures }) => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/reminders"] });
       queryClient.invalidateQueries({ queryKey: ["/api/stats"] });
-      toast({ title: task ? "Automation gespeichert" : "Automation angelegt" });
+      toast(reminderFailures ? { title: task ? "Automation gespeichert" : "Automation angelegt", description: `${reminderFailures} Erinnerung(en) konnten nicht gespeichert werden.`, variant: "destructive" } : { title: task ? "Automation gespeichert" : "Automation angelegt" });
       onOpenChange(false);
     },
     onError: (e: Error) => toast({ title: "Fehler", description: e.message, variant: "destructive" }),
@@ -158,11 +171,20 @@ function TaskDialog({ open, onOpenChange, bots, task }: { open: boolean; onOpenC
                   <p className="mt-2 text-xs text-muted-foreground">Serveradresse und Code in der App eintragen. Das Gerät erscheint automatisch in der Auswahl.</p>
                 </div>
               )}
-              {!devices.length && !pairing && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Smartphone className="h-3.5 w-3.5" />Noch kein Android-Gerät gekoppelt.</p>}
-            </section>
+          {!devices.length && !pairing && <p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Smartphone className="h-3.5 w-3.5" />Noch kein Android-Gerät gekoppelt.</p>}
+          </section>
           )}
+          {!task ? <div className="rounded-lg border border-border p-3">
+            <Button type="button" size="sm" variant="outline" onClick={() => setReminderPanelOpen((value) => !value)}><BellRing className="mr-2 h-4 w-4" />Erinnerungen{draftReminders.length ? ` · ${draftReminders.length}` : ""}</Button>
+            {reminderPanelOpen ? <div className="mt-3 space-y-2">
+              <p className="text-xs text-muted-foreground">Diese Erinnerungen werden direkt nach dem Anlegen mit der Automation gespeichert.</p>
+              <div className="flex gap-2"><Input value={draftReminder} onChange={(event) => setDraftReminder(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && draftReminder.trim()) { setDraftReminders((items) => [...items, draftReminder.trim()]); setDraftReminder(""); } }} maxLength={2_000} placeholder="Neue Erinnerung …" /><Button type="button" size="icon" variant="outline" disabled={!draftReminder.trim()} onClick={() => { setDraftReminders((items) => [...items, draftReminder.trim()]); setDraftReminder(""); }} aria-label="Erinnerung vormerken"><Plus className="h-4 w-4" /></Button></div>
+              {draftReminders.map((item, index) => <div key={`${index}-${item}`} className="flex items-start gap-2 rounded-md bg-muted/40 px-2 py-1.5 text-xs"><span className="min-w-0 flex-1 whitespace-pre-wrap">{item}</span><Button type="button" size="icon" variant="ghost" className="h-6 w-6" aria-label="Vorgemerkte Erinnerung entfernen" onClick={() => setDraftReminders((items) => items.filter((_, itemIndex) => itemIndex !== index))}><Trash2 className="h-3.5 w-3.5" /></Button></div>)}
+            </div> : null}
+          </div> : null}
         </div>
         <DialogFooter>
+          {task ? <Button type="button" variant="outline" className="mr-auto" onClick={() => { onManageReminders(task); onOpenChange(false); }}><BellRing className="mr-2 h-4 w-4" />Erinnerungen</Button> : null}
           <Button variant="ghost" onClick={() => onOpenChange(false)}>Abbrechen</Button>
           <Button onClick={() => create.mutate()} disabled={!name.trim() || !prompt.trim() || !bots.length || (deliveryType === "nexar_notification" && !notificationDeviceId) || create.isPending} data-testid="button-save-task">{task ? "Speichern" : "Anlegen"}</Button>
         </DialogFooter>
@@ -178,6 +200,8 @@ export default function Tasks() {
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const [editing, setEditing] = useState<Task | undefined>();
+  const [activeTab, setActiveTab] = useState<"automations" | "reminders">("automations");
+  const [reminderTask, setReminderTask] = useState<Task | null>(null);
   const { data: runs } = useQuery<Run[]>({ queryKey: [selected ? `/api/runs?taskId=${selected}` : "/api/runs"], refetchInterval: 30_000, staleTime: 0 });
 
   const invalidate = () => {
@@ -197,6 +221,11 @@ export default function Tasks() {
       <PageHeader title="Automationen" sub="Bots arbeiten nach Zeitplan. Ergebnisse gehen per Webhook oder als gestaltete Nexar-Bots-Benachrichtigung auf Android.">
         <Button size="sm" onClick={() => setOpen(true)} disabled={!bots.length} data-testid="button-create-task"><Plus className="mr-1 h-4 w-4" />Neue Automation</Button>
       </PageHeader>
+      <div className="mx-6 flex gap-2 border-b border-border" role="tablist" aria-label="Automation-Bereiche">
+        <Button role="tab" aria-selected={activeTab === "automations"} variant="ghost" className={`rounded-none border-b-2 ${activeTab === "automations" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={() => setActiveTab("automations")}><History className="mr-2 h-4 w-4" />Automationen</Button>
+        <Button role="tab" aria-selected={activeTab === "reminders"} variant="ghost" className={`rounded-none border-b-2 ${activeTab === "reminders" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={() => setActiveTab("reminders")}><ListTodo className="mr-2 h-4 w-4" />Erinnerungen</Button>
+      </div>
+      {activeTab === "reminders" ? <div className="p-6"><RemindersPanel tasks={tasks || []} /></div> : (
       <div className="grid gap-6 p-6 xl:grid-cols-[1fr_26rem]">
         <section className="overflow-hidden rounded-lg border border-card-border bg-card">
           {isLoading ? <div className="space-y-2 p-4">{[0, 1].map((i) => <Skeleton key={i} className="h-14" />)}</div> : !tasks?.length ? (
@@ -205,13 +234,15 @@ export default function Tasks() {
             const b = bots.find((x) => x.id === t.botId); const mobile = t.deliveryType === "nexar_notification";
             return <li key={t.id} className={`flex items-center gap-3 px-4 py-3 ${selected === t.id ? "bg-accent/60" : ""}`} data-testid={`row-task-${t.id}`}>
               {b && <BotAvatar bot={b} size="sm" />}<button className="min-w-0 flex-1 text-left" onClick={() => setSelected(selected === t.id ? null : t.id)} data-testid={`button-select-task-${t.id}`}><div className="flex items-center gap-2 text-sm font-medium">{t.name}{mobile ? <BellRing className="h-3.5 w-3.5 text-primary" /> : t.webhookUrl ? <Webhook className="h-3.5 w-3.5 text-muted-foreground" /> : null}</div><div className="line-clamp-1 text-xs text-muted-foreground">{t.prompt}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{intervalLabel(t.intervalMinutes)} · zuletzt {ago(t.lastRunAt)} · nächster {t.enabled ? untilText(t.nextRunAt) : "pausiert"}</div></button>
-              <Button size="icon" variant="ghost" onClick={() => { setEditing(t); setOpen(true); }} aria-label="Bearbeiten"><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => run.mutate(t.id)} disabled={run.isPending && run.variables === t.id} aria-label="Jetzt ausführen" data-testid={`button-run-${t.id}`}>{run.isPending && run.variables === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}</Button><Switch checked={t.enabled} onCheckedChange={(enabled) => toggle.mutate({ id: t.id, enabled })} aria-label="Aktiv" data-testid={`switch-task-${t.id}`} /><Button size="icon" variant="ghost" onClick={() => del.mutate(t.id)} aria-label="Löschen" data-testid={`button-del-task-${t.id}`}><Trash2 className="h-4 w-4" /></Button>
+              <Button size="sm" variant="outline" onClick={() => setReminderTask(t)} aria-label={`Erinnerungen für ${t.name}`}><BellRing className="mr-1.5 h-3.5 w-3.5" />Erinnerungen</Button><Button size="icon" variant="ghost" onClick={() => { setEditing(t); setOpen(true); }} aria-label="Bearbeiten"><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => run.mutate(t.id)} disabled={run.isPending && run.variables === t.id} aria-label="Jetzt ausführen" data-testid={`button-run-${t.id}`}>{run.isPending && run.variables === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}</Button><Switch checked={t.enabled} onCheckedChange={(enabled) => toggle.mutate({ id: t.id, enabled })} aria-label="Aktiv" data-testid={`switch-task-${t.id}`} /><Button size="icon" variant="ghost" onClick={() => del.mutate(t.id)} aria-label="Löschen" data-testid={`button-del-task-${t.id}`}><Trash2 className="h-4 w-4" /></Button>
             </li>;
           })}</ul>}
         </section>
         <section className="rounded-lg border border-card-border bg-card"><h2 className="flex items-center gap-2 border-b border-border px-4 py-3 text-sm font-semibold"><History className="h-4 w-4" />{selected ? "Läufe dieser Automation" : "Alle Läufe"}</h2>{!runs?.length ? <p className="px-4 py-10 text-center text-sm text-muted-foreground">Noch keine Läufe.</p> : <ul className="max-h-[36rem] divide-y divide-border overflow-y-auto">{runs.map((r) => <li key={r.id} className="px-4 py-3" data-testid={`row-run-${r.id}`}><div className="flex items-center justify-between font-mono text-[11px] text-muted-foreground"><span className={r.status === "ok" ? "text-primary" : "text-destructive"}>{r.status === "ok" ? "OK" : "FEHLER"} · {r.source}</span><span>{ago(r.startedAt)} · {(r.durationMs / 1000).toFixed(1)}s</span></div><p className="mt-1 line-clamp-4 whitespace-pre-wrap text-xs">{r.output}</p></li>)}</ul>}</section>
       </div>
-      <TaskDialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditing(undefined); }} bots={bots} task={editing} />
+      )}
+      <TaskDialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditing(undefined); }} bots={bots} task={editing} onManageReminders={setReminderTask} />
+      <TaskRemindersDialog task={reminderTask} open={!!reminderTask} onOpenChange={(value) => { if (!value) setReminderTask(null); }} />
     </div>
   );
 }

@@ -57,6 +57,14 @@ class NexarApi {
         authenticated(credentials, "/mobile/events/$eventId").get().build(),
     )).event
 
+    suspend fun reminders(credentials: DeviceCredentials): List<AutomationReminder> = json.decodeFromString<RemindersResponse>(call(
+        authenticated(credentials, "/mobile/reminders").get().build(),
+    )).reminders
+
+    suspend fun deleteReminder(credentials: DeviceCredentials, reminderId: String) {
+        call(authenticated(credentials, "/mobile/reminders/$reminderId").delete().build())
+    }
+
     suspend fun seen(credentials: DeviceCredentials, eventId: String) {
         call(authenticated(credentials, "/mobile/events/$eventId/seen").post("{}".toRequestBody(mediaType)).build())
     }

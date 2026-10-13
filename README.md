@@ -9,6 +9,7 @@ Selbst gehostete Agenten-Plattform. Du bringst deine eigenen API-Keys mit (Groq 
 - **Werkzeuge (Function Calling):** Datum & Zeit, Rechner, Webseiten lesen, Websuche (DuckDuckGo mit Wikipedia-Fallback), Gedächtnis
 - **Chat** mit Verläufen, Markdown, sichtbaren Werkzeug-Aufrufen
 - **Automationen:** Bots führen Aufträge nach Zeitplan aus (15 Min. bis wöchentlich), Ergebnis optional per Webhook an Discord, Slack oder eigene URL
+- **Automation-Erinnerungen:** eigener Reiter **Erinnerungen** sowie ein Erinnerungen-Button an jeder Automation zum Anlegen/Löschen; Erinnerungen erscheinen in den Automationsergebnissen und können in der gekoppelten Android-App direkt gelöscht werden.
 - **Nexar-Bots-Benachrichtigung:** eigener Automationskanal für Android mit sicherer Einmal-Kopplung, animierter Vollbildanzeige, immer sichtbarem Ausführungsdatum/-zeitpunkt, scrollbar langen Texten und schließbarer Anzeige. Der Bot liefert ein validiertes Layout mit Überschriften, Texten, Listen, Kennzahlen und wiederverwendbaren Widgets.
 - **Dashboard** mit Läufen, Tokens, Fehlern und Uptime
 - **BYOK:** Keys werden nur auf deinem Server gespeichert, Modell-Liste wird live von deinem Key geladen

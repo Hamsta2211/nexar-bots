@@ -7,7 +7,7 @@ const pairSchema = z.object({
   code: z.string().trim().min(7).max(40),
   installationId: z.string().trim().min(16).max(120),
   displayName: z.string().trim().min(1).max(80),
-  platform: z.literal("android").default("android"),
+  platform: z.enum(["android", "android_expo"]).default("android"),
   fcmPushToken: z.string().trim().max(255).optional(),
 });
 const heartbeatSchema = z.object({ fcmPushToken: z.string().trim().max(255).nullable().optional() });
@@ -96,7 +96,10 @@ export async function sendNotificationPush(device: NotificationDevice, event: No
         message: {
           token: device.fcmPushToken,
           data: { eventId: event.id },
-          android: { priority: "high" },
+          ...(device.platform === "android_expo" ? {
+            notification: { title: event.title, body: String(event.payload.summary || "Öffne Nexar-Bots für die vollständige Meldung.").slice(0, 160) },
+            android: { priority: "high", notification: { channel_id: "nexar" } },
+          } : { android: { priority: "high" } }),
         },
       }),
       signal: AbortSignal.timeout(15_000),
@@ -117,6 +120,23 @@ export function registerNotificationRoutes(app: Express) {
   app.post("/api/notification-devices/pairings", async (req, res) => res.json(await notificationStore.createPairing(req.user!.id)));
   app.delete("/api/notification-devices/:id", async (req, res) => {
     const deleted = await notificationStore.deleteDevice(req.user!.id, String(req.params.id));
+    res.status(deleted ? 200 : 404).json({ ok: deleted });
+  });
+  app.get("/api/reminders", async (req, res) => {
+    const rawTaskId = req.query.taskId == null ? undefined : Number(req.query.taskId);
+    if (rawTaskId !== undefined && (!Number.isInteger(rawTaskId) || rawTaskId < 1)) return res.status(400).json({ message: "Ungültige Automation" });
+    res.json(await notificationStore.listTaskReminders(rawTaskId));
+  });
+  app.post("/api/tasks/:id/reminders", async (req, res) => {
+    const taskId = Number(req.params.id);
+    const content = typeof req.body?.content === "string" ? req.body.content.trim() : "";
+    if (!Number.isSafeInteger(taskId) || taskId < 1) return res.status(400).json({ message: "Ungültige Automation" });
+    if (!content || content.length > 2_000) return res.status(400).json({ message: "Eine Erinnerung muss 1 bis 2.000 Zeichen enthalten." });
+    if (!(await notificationStore.taskExists(taskId))) return res.status(404).json({ message: "Automation nicht gefunden" });
+    res.status(201).json(await notificationStore.addTaskReminder(taskId, content));
+  });
+  app.delete("/api/reminders/:id", async (req, res) => {
+    const deleted = await notificationStore.deleteTaskReminder(String(req.params.id));
     res.status(deleted ? 200 : 404).json({ ok: deleted });
   });
 
@@ -141,6 +161,16 @@ export function registerNotificationRoutes(app: Express) {
     await notificationStore.touchDevice(device.id);
     const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
     res.json({ events: (await notificationStore.listPendingEvents(device.id, limit)).map(publicEvent) });
+  });
+  app.get("/mobile/reminders", async (req, res) => {
+    const device = await requireMobileDevice(req, res); if (!device) return;
+    await notificationStore.touchDevice(device.id);
+    res.json({ reminders: await notificationStore.listDeviceReminders(device.id) });
+  });
+  app.delete("/mobile/reminders/:id", async (req, res) => {
+    const device = await requireMobileDevice(req, res); if (!device) return;
+    const deleted = await notificationStore.deleteDeviceReminder(device.id, String(req.params.id));
+    res.status(deleted ? 200 : 404).json({ ok: deleted, message: deleted ? undefined : "Erinnerung nicht gefunden" });
   });
   app.get("/mobile/events/:id", async (req, res) => {
     const device = await requireMobileDevice(req, res); if (!device) return;
