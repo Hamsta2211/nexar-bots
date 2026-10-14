@@ -2,22 +2,63 @@ import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "node:http";
 import { storage } from "./storage";
 import { runAgent, listModels, TOOL_META } from "./agent";
-import { keyInfos, addKey, removeKey, moveKey, allKeys, resetKeyState } from "./keys";
-import { getCatalog, invalidateCatalog, startCatalogRefresher, DEFAULT_MODEL } from "./models";
-import { insertBotSchema, insertTaskSchema, updateTaskSchema, PROVIDERS } from "@shared/schema";
+import {
+  keyInfos,
+  addKey,
+  removeKey,
+  moveKey,
+  allKeys,
+  resetKeyState,
+} from "./keys";
+import {
+  getCatalog,
+  invalidateCatalog,
+  startCatalogRefresher,
+  DEFAULT_MODEL,
+} from "./models";
+import {
+  insertBotSchema,
+  insertTaskSchema,
+  updateTaskSchema,
+  PROVIDERS,
+} from "@shared/schema";
 import type { Provider, Task, Stats, KeyStatus } from "@shared/schema";
 import { requireAuth, registerAuthRoutes } from "./auth";
-import { getSshConfig, saveSshConfig, publicSshConfig, clearSshSecrets, sshExec, systemInfo, generateKey } from "./ssh";
-import { buildNotificationSystemPrompt, parseAutomationNotification } from "./notification-format";
+import {
+  getSshConfig,
+  saveSshConfig,
+  publicSshConfig,
+  clearSshSecrets,
+  sshExec,
+  systemInfo,
+  generateKey,
+} from "./ssh";
+import {
+  buildNotificationSystemPrompt,
+  parseAutomationNotification,
+} from "./notification-format";
 import { notificationStore } from "./notification-store";
-import { registerNotificationRoutes, sendNotificationPush } from "./notifications";
+import {
+  queueReminderSync,
+  registerNotificationRoutes,
+  sendNotificationPush,
+} from "./notifications";
+import {
+  extractWeatherLocation,
+  fetchCurrentWeather,
+  isWeatherRequest,
+} from "./weather";
 
 const startedAt = Date.now();
 const running = new Set<number>();
 
 const activeChats = new Map<number, AbortController>(); // botId -> laufender Chat
 
-function nextScheduledRun(startAt: number, intervalMinutes: number, now = Date.now()) {
+function nextScheduledRun(
+  startAt: number,
+  intervalMinutes: number,
+  now = Date.now(),
+) {
   const interval = Math.max(1, intervalMinutes) * 60_000;
   if (startAt > now) return startAt;
   return startAt + (Math.floor((now - startAt) / interval) + 1) * interval;
@@ -25,10 +66,19 @@ function nextScheduledRun(startAt: number, intervalMinutes: number, now = Date.n
 
 type ConvSummary = { upto: number; text: string };
 const getSummary = (convId: number): ConvSummary | null => {
-  try { return JSON.parse(storage.getSetting(`convsum_${convId}`) || "null"); } catch { return null; }
+  try {
+    return JSON.parse(storage.getSetting(`convsum_${convId}`) || "null");
+  } catch {
+    return null;
+  }
 };
 
-async function postWebhook(url: string, botName: string, taskName: string, text: string) {
+async function postWebhook(
+  url: string,
+  botName: string,
+  taskName: string,
+  text: string,
+) {
   if (!url) return;
   const isDiscord = /discord(app)?\.com\/api\/webhooks/.test(url);
   const isSlack = /hooks\.slack\.com/.test(url);
@@ -39,7 +89,12 @@ async function postWebhook(url: string, botName: string, taskName: string, text:
       ? { text: header + text }
       : { bot: botName, task: taskName, text, at: new Date().toISOString() };
   try {
-    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: AbortSignal.timeout(15_000) });
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    });
   } catch (e) {
     console.error("Webhook fehlgeschlagen", e);
   }
@@ -50,22 +105,116 @@ export async function executeTask(task: Task) {
   running.add(task.id);
   const t0 = Date.now();
   const bot = await storage.getBot(task.botId);
-  await storage.updateTask(task.id, { lastRunAt: t0, nextRunAt: nextScheduledRun(task.startAt || t0, task.intervalMinutes, t0) });
+  await storage.updateTask(task.id, {
+    lastRunAt: t0,
+    nextRunAt: nextScheduledRun(task.startAt || t0, task.intervalMinutes, t0),
+  });
   try {
     if (!bot) throw new Error("Bot existiert nicht mehr");
-    const notificationDeviceId = task.deliveryType === "nexar_notification" ? task.notificationDeviceId : null;
+    const notificationDeviceId =
+      task.deliveryType === "nexar_notification"
+        ? task.notificationDeviceId
+        : null;
     if (task.deliveryType === "nexar_notification" && !notificationDeviceId) {
-      throw new Error("Nexar-Bots-Benachrichtigung pausiert: Das gekoppelte Android-Gerät wurde entfernt. Wähle in der Automation ein neues Gerät.");
+      throw new Error(
+        "Nexar-Bots-Benachrichtigung pausiert: Das gekoppelte Android-Gerät wurde entfernt. Wähle in der Automation ein neues Gerät.",
+      );
     }
-    const existingWidgets = notificationDeviceId ? await notificationStore.listWidgets(task.id, notificationDeviceId) : [];
+    const existingWidgets = notificationDeviceId
+      ? await notificationStore.listWidgets(task.id, notificationDeviceId)
+      : [];
     const r = await runAgent(bot, [{ role: "user", content: task.prompt }], {
-      systemAddendum: notificationDeviceId ? buildNotificationSystemPrompt(existingWidgets, task.timeZone || "Europe/Vienna") : undefined,
+      systemAddendum: notificationDeviceId
+        ? buildNotificationSystemPrompt(
+            existingWidgets,
+            task.timeZone || "Europe/Vienna",
+          )
+        : undefined,
     });
     if (notificationDeviceId) {
       const formatted = parseAutomationNotification(r.content, task.name);
+      const modelWeatherWidget = formatted.widgetOperations.find(
+        (operation) =>
+          operation.op === "upsert" && operation.kind === "weather",
+      );
+      const savedWeatherWidget = existingWidgets.find(
+        (widget) => widget.kind === "weather",
+      );
+      const weatherRequested =
+        isWeatherRequest(task.prompt) || Boolean(modelWeatherWidget);
+      if (weatherRequested) {
+        const requestedLocation =
+          extractWeatherLocation(task.prompt) ||
+          (modelWeatherWidget?.op === "upsert" &&
+          typeof modelWeatherWidget.data.location === "string"
+            ? modelWeatherWidget.data.location
+            : "") ||
+          extractWeatherLocation(r.content) ||
+          (typeof savedWeatherWidget?.data.location === "string"
+            ? savedWeatherWidget.data.location
+            : "");
+        if (requestedLocation) {
+          try {
+            const weather = await fetchCurrentWeather(
+              requestedLocation,
+              task.timeZone || "Europe/Vienna",
+            );
+            const obsoleteWeatherKeys = existingWidgets
+              .filter(
+                (widget) =>
+                  widget.kind === "weather" && widget.key !== "current-weather",
+              )
+              .map((widget) => widget.key);
+            const operations = formatted.widgetOperations.filter(
+              (operation) =>
+                !(operation.op === "upsert" && operation.kind === "weather") &&
+                !(
+                  operation.op === "delete" &&
+                  (operation.key === "current-weather" ||
+                    obsoleteWeatherKeys.includes(operation.key))
+                ),
+            );
+            formatted.widgetOperations = [
+              ...operations.slice(
+                0,
+                Math.max(0, 19 - obsoleteWeatherKeys.length),
+              ),
+              ...obsoleteWeatherKeys
+                .slice(0, 2)
+                .map((key) => ({ op: "delete" as const, key })),
+              {
+                op: "upsert",
+                key: "current-weather",
+                kind: "weather",
+                title: `Wetter · ${weather.location}`,
+                data: weather,
+              },
+            ];
+          } catch (error) {
+            console.warn(
+              "Nexar-Bots-Wetterkarte konnte nicht aktualisiert werden:",
+              error instanceof Error ? error.message : "Wetterdienstfehler",
+            );
+            formatted.blocks.push({
+              type: "text",
+              text: "Aktuelle Wetterdaten konnten diesmal nicht geladen werden. Die zuletzt gespeicherte Wetterkarte bleibt verfügbar.",
+            });
+          }
+        } else {
+          formatted.blocks.push({
+            type: "text",
+            text: "Für aktuelle Wetterdaten fehlt ein Ort. Ergänze in der Automation zum Beispiel „Wetter in Linz“.",
+          });
+        }
+      }
       const event = await notificationStore.persistAutomationNotification({
-        deviceId: notificationDeviceId, taskId: task.id, botId: bot.id, title: formatted.title, formatted,
-        occurredAt: new Date(t0).toISOString(), timeZone: task.timeZone || "Europe/Vienna",
+        deviceId: notificationDeviceId,
+        taskId: task.id,
+        botId: bot.id,
+        title: formatted.title,
+        formatted,
+        occurredAt: new Date(t0).toISOString(),
+        timeZone: task.timeZone || "Europe/Vienna",
         source: { taskName: task.name, botName: bot.name },
       });
       const device = await notificationStore.getDevice(notificationDeviceId);
@@ -73,9 +222,27 @@ export async function executeTask(task: Task) {
     } else {
       await postWebhook(task.webhookUrl, bot.name, task.name, r.content);
     }
-    await storage.addRun({ taskId: task.id, botId: bot.id, source: "task", status: "ok", output: r.content, tokens: r.tokens, durationMs: Date.now() - t0, startedAt: t0 });
+    await storage.addRun({
+      taskId: task.id,
+      botId: bot.id,
+      source: "task",
+      status: "ok",
+      output: r.content,
+      tokens: r.tokens,
+      durationMs: Date.now() - t0,
+      startedAt: t0,
+    });
   } catch (e: any) {
-    await storage.addRun({ taskId: task.id, botId: task.botId, source: "task", status: "error", output: String(e?.message || e), tokens: 0, durationMs: Date.now() - t0, startedAt: t0 });
+    await storage.addRun({
+      taskId: task.id,
+      botId: task.botId,
+      source: "task",
+      status: "error",
+      output: String(e?.message || e),
+      tokens: 0,
+      durationMs: Date.now() - t0,
+      startedAt: t0,
+    });
   } finally {
     running.delete(task.id);
   }
@@ -90,23 +257,39 @@ function startScheduler() {
     }
   }, 30_000);
   // Läufe älter als 90 Tage aufräumen
-  setInterval(() => storage.pruneRuns(Date.now() - 90 * 86_400_000).catch(() => {}), 6 * 3600_000);
+  setInterval(
+    () => storage.pruneRuns(Date.now() - 90 * 86_400_000).catch(() => {}),
+    6 * 3600_000,
+  );
 }
 
 const idParam = (req: Request) => Number(req.params.id);
 
-async function ownsNotificationDevice(userId: number, deviceId: string | null | undefined) {
+async function ownsNotificationDevice(
+  userId: number,
+  deviceId: string | null | undefined,
+) {
   if (!deviceId) return false;
-  return (await notificationStore.listDevices(userId)).some((device) => device.id === deviceId);
+  return (await notificationStore.listDevices(userId)).some(
+    (device) => device.id === deviceId,
+  );
 }
 
-export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+export async function registerRoutes(
+  httpServer: Server,
+  app: Express,
+): Promise<Server> {
   await storage.init();
   app.use("/api", requireAuth);
   registerAuthRoutes(app);
   registerNotificationRoutes(app);
 
-  app.get("/api/health", async (_req, res) => res.json({ ok: true, uptimeSec: Math.round((Date.now() - startedAt) / 1000) }));
+  app.get("/api/health", async (_req, res) =>
+    res.json({
+      ok: true,
+      uptimeSec: Math.round((Date.now() - startedAt) / 1000),
+    }),
+  );
   // ---- Keys ----
   app.get("/api/keys", async (_req, res) => {
     const mk = (p: Provider) => {
@@ -119,7 +302,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/keys/test", async (req, res) => {
     const provider = req.body?.provider as Provider;
-    if (!PROVIDERS.includes(provider)) return res.status(400).json({ message: "Unbekannter Anbieter" });
+    if (!PROVIDERS.includes(provider))
+      return res.status(400).json({ message: "Unbekannter Anbieter" });
     try {
       let key: string | undefined = req.body?.key || undefined;
       if (req.body?.id) {
@@ -136,9 +320,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/keys/:provider", async (req, res) => {
     const p = req.params.provider as Provider;
-    if (!PROVIDERS.includes(p)) return res.status(400).json({ message: "Unbekannter Anbieter" });
+    if (!PROVIDERS.includes(p))
+      return res.status(400).json({ message: "Unbekannter Anbieter" });
     const key = String(req.body?.key || "").trim();
-    if (key.length < 10) return res.status(400).json({ message: "Key zu kurz" });
+    if (key.length < 10)
+      return res.status(400).json({ message: "Key zu kurz" });
     try {
       await addKey(p, key, req.body?.label);
     } catch (e: any) {
@@ -149,25 +335,29 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.delete("/api/keys/:provider/:id", async (req, res) => {
     const p = req.params.provider as Provider;
-    if (!PROVIDERS.includes(p)) return res.status(400).json({ message: "Unbekannter Anbieter" });
+    if (!PROVIDERS.includes(p))
+      return res.status(400).json({ message: "Unbekannter Anbieter" });
     await removeKey(p, String(req.params.id));
     invalidateCatalog(p);
     res.json({ ok: true });
   });
   app.post("/api/keys/:provider/:id/move", async (req, res) => {
     const p = req.params.provider as Provider;
-    if (!PROVIDERS.includes(p)) return res.status(400).json({ message: "Unbekannter Anbieter" });
+    if (!PROVIDERS.includes(p))
+      return res.status(400).json({ message: "Unbekannter Anbieter" });
     await moveKey(p, String(req.params.id), req.body?.dir === -1 ? -1 : 1);
     res.json({ ok: true });
   });
   app.get("/api/models/:provider", async (req, res) => {
     const provider = req.params.provider as Provider;
-    if (!PROVIDERS.includes(provider)) return res.status(400).json({ message: "Unbekannter Anbieter" });
+    if (!PROVIDERS.includes(provider))
+      return res.status(400).json({ message: "Unbekannter Anbieter" });
     res.json(await getCatalog(provider, req.query.refresh === "1"));
   });
   app.post("/api/models/:provider/refresh", async (req, res) => {
     const provider = req.params.provider as Provider;
-    if (!PROVIDERS.includes(provider)) return res.status(400).json({ message: "Unbekannter Anbieter" });
+    if (!PROVIDERS.includes(provider))
+      return res.status(400).json({ message: "Unbekannter Anbieter" });
     res.json(await getCatalog(provider, true));
   });
 
@@ -179,10 +369,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const b = req.body || {};
     const patch: any = {};
     if (typeof b.host === "string") patch.host = b.host.trim();
-    if (b.port !== undefined) patch.port = Math.min(Math.max(Number(b.port) || 22, 1), 65535);
+    if (b.port !== undefined)
+      patch.port = Math.min(Math.max(Number(b.port) || 22, 1), 65535);
     if (typeof b.username === "string") patch.username = b.username.trim();
-    if (b.authType === "key" || b.authType === "password") patch.authType = b.authType;
-    if (typeof b.privateKey === "string") patch.privateKey = b.privateKey.trim() ? b.privateKey.trim() + "\n" : "";
+    if (b.authType === "key" || b.authType === "password")
+      patch.authType = b.authType;
+    if (typeof b.privateKey === "string")
+      patch.privateKey = b.privateKey.trim() ? b.privateKey.trim() + "\n" : "";
     if (typeof b.passphrase === "string") patch.passphrase = b.passphrase;
     if (typeof b.password === "string") patch.password = b.password;
     if (typeof b.safeMode === "boolean") patch.safeMode = b.safeMode;
@@ -207,13 +400,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/ssh/test", async (_req, res) => {
     try {
       const info = await systemInfo();
-      res.json({ ok: true, info, hostKey: storage.getSetting("ssh_hostkey") || "" });
+      res.json({
+        ok: true,
+        info,
+        hostKey: storage.getSetting("ssh_hostkey") || "",
+      });
     } catch (e: any) {
       res.json({ ok: false, message: e.message });
     }
   });
   app.get("/api/ssh/info", async (_req, res) => {
-    if (!getSshConfig().host) return res.json({ ok: false, message: "Nicht eingerichtet" });
+    if (!getSshConfig().host)
+      return res.json({ ok: false, message: "Nicht eingerichtet" });
     try {
       res.json({ ok: true, info: await systemInfo() });
     } catch (e: any) {
@@ -224,10 +422,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const command = String(req.body?.command || "").trim();
     if (!command) return res.status(400).json({ message: "Befehl fehlt" });
     try {
-      const r = await sshExec(command, { timeoutMs: Math.min(Number(req.body?.timeoutSec) || 60, 600) * 1000 });
+      const r = await sshExec(command, {
+        timeoutMs: Math.min(Number(req.body?.timeoutSec) || 60, 600) * 1000,
+      });
       res.json({ ok: true, ...r });
     } catch (e: any) {
-      res.json({ ok: false, stdout: "", stderr: e.message, code: null, durationMs: 0 });
+      res.json({
+        ok: false,
+        stdout: "",
+        stderr: e.message,
+        code: null,
+        durationMs: 0,
+      });
     }
   });
 
@@ -239,12 +445,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/bots", async (req, res) => {
     const p = insertBotSchema.safeParse(req.body);
-    if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
+    if (!p.success)
+      return res.status(400).json({ message: p.error.issues[0]?.message });
     res.json(await storage.createBot(p.data));
   });
   app.patch("/api/bots/:id", async (req, res) => {
     const p = insertBotSchema.partial().safeParse(req.body);
-    if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
+    if (!p.success)
+      return res.status(400).json({ message: p.error.issues[0]?.message });
     res.json(await storage.updateBot(idParam(req), p.data));
   });
   app.delete("/api/bots/:id", async (req, res) => {
@@ -252,18 +460,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ok: true });
   });
 
-  app.get("/api/bots/:id/memories", async (req, res) => res.json(await storage.listMemories(idParam(req))));
+  app.get("/api/bots/:id/memories", async (req, res) =>
+    res.json(await storage.listMemories(idParam(req))),
+  );
   app.delete("/api/memories/:id", async (req, res) => {
     await storage.deleteMemory(idParam(req));
     res.json({ ok: true });
   });
 
   // ---- Conversations ----
-  app.get("/api/bots/:id/conversations", async (req, res) => res.json(await storage.listConversations(idParam(req))));
-  app.get("/api/conversations/:id/messages", async (req, res) => res.json(await storage.listMessages(idParam(req))));
+  app.get("/api/bots/:id/conversations", async (req, res) =>
+    res.json(await storage.listConversations(idParam(req))),
+  );
+  app.get("/api/conversations/:id/messages", async (req, res) =>
+    res.json(await storage.listMessages(idParam(req))),
+  );
   app.delete("/api/conversations/:id", async (req, res) => {
     await storage.deleteConversation(idParam(req));
-    if (storage.getSetting(`convsum_${idParam(req)}`)) await storage.setSetting(`convsum_${idParam(req)}`, "");
+    if (storage.getSetting(`convsum_${idParam(req)}`))
+      await storage.setSetting(`convsum_${idParam(req)}`, "");
     res.json({ ok: true });
   });
 
@@ -279,7 +494,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     await storage.addMessage(convId, "user", text);
     const sum = getSummary(convId);
-    const all = (await storage.listMessages(convId)).filter((m) => !sum || m.id > sum.upto);
+    const all = (await storage.listMessages(convId)).filter(
+      (m) => !sum || m.id > sum.upto,
+    );
     const history = all.map((m) => ({ role: m.role, content: m.content }));
     const t0 = Date.now();
     activeChats.get(bot.id)?.abort();
@@ -292,18 +509,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         signal: ctrl.signal,
         onCompact: (text, covered) => {
           const upto = covered > 0 ? all[covered - 1].id : sum?.upto || 0;
-          summaryWrite = storage.setSetting(`convsum_${convId}`, JSON.stringify({ upto, text }));
+          summaryWrite = storage.setSetting(
+            `convsum_${convId}`,
+            JSON.stringify({ upto, text }),
+          );
         },
       });
       await summaryWrite;
-      const msg = await storage.addMessage(convId, "assistant", r.content, JSON.stringify(r.steps));
+      const msg = await storage.addMessage(
+        convId,
+        "assistant",
+        r.content,
+        JSON.stringify(r.steps),
+      );
       await storage.touchConversation(convId);
-      await storage.addRun({ taskId: null, botId: bot.id, source: "chat", status: "ok", output: r.content.slice(0, 500), tokens: r.tokens, durationMs: Date.now() - t0, startedAt: t0 });
+      await storage.addRun({
+        taskId: null,
+        botId: bot.id,
+        source: "chat",
+        status: "ok",
+        output: r.content.slice(0, 500),
+        tokens: r.tokens,
+        durationMs: Date.now() - t0,
+        startedAt: t0,
+      });
       res.json({ conversationId: convId, message: msg });
     } catch (e: any) {
-      const errText = ctrl.signal.aborted ? "Gestoppt." : `Fehler: ${e?.message || e}`;
+      const errText = ctrl.signal.aborted
+        ? "Gestoppt."
+        : `Fehler: ${e?.message || e}`;
       const msg = await storage.addMessage(convId, "assistant", errText);
-      await storage.addRun({ taskId: null, botId: bot.id, source: "chat", status: "error", output: errText, tokens: 0, durationMs: Date.now() - t0, startedAt: t0 });
+      await storage.addRun({
+        taskId: null,
+        botId: bot.id,
+        source: "chat",
+        status: "error",
+        output: errText,
+        tokens: 0,
+        durationMs: Date.now() - t0,
+        startedAt: t0,
+      });
       res.json({ conversationId: convId, message: msg, error: true });
     } finally {
       if (activeChats.get(bot.id) === ctrl) activeChats.delete(bot.id);
@@ -316,36 +561,57 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ---- Tasks ----
-  app.get("/api/tasks", async (_req, res) => res.json(await storage.listTasks()));
+  app.get("/api/tasks", async (_req, res) =>
+    res.json(await storage.listTasks()),
+  );
   app.post("/api/tasks", async (req, res) => {
     const p = insertTaskSchema.safeParse(req.body);
-    if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
-    if (p.data.deliveryType === "nexar_notification" && !(await ownsNotificationDevice(req.user!.id, p.data.notificationDeviceId))) {
-      return res.status(400).json({ message: "Das gewählte Android-Gerät ist nicht gekoppelt." });
+    if (!p.success)
+      return res.status(400).json({ message: p.error.issues[0]?.message });
+    if (
+      p.data.deliveryType === "nexar_notification" &&
+      !(await ownsNotificationDevice(req.user!.id, p.data.notificationDeviceId))
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Das gewählte Android-Gerät ist nicht gekoppelt." });
     }
     res.json(await storage.createTask(p.data));
   });
   app.patch("/api/tasks/:id", async (req, res) => {
     const p = updateTaskSchema.safeParse(req.body);
-    if (!p.success) return res.status(400).json({ message: p.error.issues[0]?.message });
+    if (!p.success)
+      return res.status(400).json({ message: p.error.issues[0]?.message });
     const patch: any = { ...p.data };
     const cur = await storage.getTask(idParam(req));
-    if (!cur) return res.status(404).json({ message: "Automation nicht gefunden" });
+    if (!cur)
+      return res.status(404).json({ message: "Automation nicht gefunden" });
     const deliveryType = p.data.deliveryType ?? cur.deliveryType;
-    const notificationDeviceId = p.data.notificationDeviceId ?? cur.notificationDeviceId;
-    if (deliveryType === "nexar_notification" && !(await ownsNotificationDevice(req.user!.id, notificationDeviceId))) {
-      return res.status(400).json({ message: "Das gewählte Android-Gerät ist nicht gekoppelt." });
+    const notificationDeviceId =
+      p.data.notificationDeviceId ?? cur.notificationDeviceId;
+    if (
+      deliveryType === "nexar_notification" &&
+      !(await ownsNotificationDevice(req.user!.id, notificationDeviceId))
+    ) {
+      return res
+        .status(400)
+        .json({ message: "Das gewählte Android-Gerät ist nicht gekoppelt." });
     }
     if (p.data.intervalMinutes || p.data.enabled || p.data.startAt) {
       const startAt = p.data.startAt ?? cur?.startAt ?? Date.now();
       patch.startAt = startAt;
-      patch.nextRunAt = nextScheduledRun(startAt, p.data.intervalMinutes ?? cur?.intervalMinutes ?? 60);
+      patch.nextRunAt = nextScheduledRun(
+        startAt,
+        p.data.intervalMinutes ?? cur?.intervalMinutes ?? 60,
+      );
     }
     res.json(await storage.updateTask(idParam(req), patch));
+    queueReminderSync(req.user!.id);
   });
   app.delete("/api/tasks/:id", async (req, res) => {
     await storage.deleteTask(idParam(req));
     res.json({ ok: true });
+    queueReminderSync(req.user!.id);
   });
   app.post("/api/tasks/:id/run", async (req, res) => {
     const t = await storage.getTask(idParam(req));
@@ -375,7 +641,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       recentRuns: (await storage.listRuns(12)).map((r) => ({
         ...r,
         botName: botsList.find((b) => b.id === r.botId)?.name || "Gelöscht",
-        taskName: r.taskId ? taskList.find((t) => t.id === r.taskId)?.name || null : null,
+        taskName: r.taskId
+          ? taskList.find((t) => t.id === r.taskId)?.name || null
+          : null,
       })),
     };
     res.json(stats);
@@ -383,23 +651,41 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   if ((await storage.listBots()).length === 0) {
     await storage.createBot({
-      name: "Nova", description: "Recherche-Agent mit Websuche und Gedächtnis", color: "lime", provider: "groq",
-      model: DEFAULT_MODEL.groq, temperature: 0.5, tools: JSON.stringify(["web_search", "fetch_url", "datetime", "memory"]),
-      systemPrompt: "Du bist Nova, ein präziser Recherche-Agent. Suche bei Faktenfragen im Web, lies relevante Seiten und nenne die Quellen-Links. Antworte auf Deutsch.",
+      name: "Nova",
+      description: "Recherche-Agent mit Websuche und Gedächtnis",
+      color: "lime",
+      provider: "groq",
+      model: DEFAULT_MODEL.groq,
+      temperature: 0.5,
+      tools: JSON.stringify(["web_search", "fetch_url", "datetime", "memory"]),
+      systemPrompt:
+        "Du bist Nova, ein präziser Recherche-Agent. Suche bei Faktenfragen im Web, lies relevante Seiten und nenne die Quellen-Links. Antworte auf Deutsch.",
     });
     await storage.createBot({
-      name: "Atlas", description: "Allrounder auf Gemini mit Rechner", color: "sky", provider: "google",
-      model: DEFAULT_MODEL.google, temperature: 0.7, tools: JSON.stringify(["calculator", "datetime"]),
-      systemPrompt: "Du bist Atlas, ein freundlicher Allround-Assistent. Rechne immer mit dem Rechner-Werkzeug. Antworte auf Deutsch.",
+      name: "Atlas",
+      description: "Allrounder auf Gemini mit Rechner",
+      color: "sky",
+      provider: "google",
+      model: DEFAULT_MODEL.google,
+      temperature: 0.7,
+      tools: JSON.stringify(["calculator", "datetime"]),
+      systemPrompt:
+        "Du bist Atlas, ein freundlicher Allround-Assistent. Rechne immer mit dem Rechner-Werkzeug. Antworte auf Deutsch.",
     });
   }
 
   if (!storage.getSetting("seed_pc_bot")) {
     await storage.setSetting("seed_pc_bot", "1");
     await storage.createBot({
-      name: "Tux", description: "Admin-Agent für deinen Ubuntu-PC per SSH", color: "amber", provider: "groq",
-      model: "openai/gpt-oss-120b", temperature: 0.2, tools: JSON.stringify(["linux_pc", "datetime", "calculator"]),
-      systemPrompt: "Du bist Tux, ein erfahrener Linux-Admin mit SSH-Zugriff auf den Ubuntu-PC des Nutzers. Prüfe zuerst den Zustand mit lesenden Befehlen, bevor du etwas veränderst. Nutze nur nicht-interaktive Befehle. Fasse Ergebnisse knapp auf Deutsch zusammen und nenne die ausgeführten Befehle.",
+      name: "Tux",
+      description: "Admin-Agent für deinen Ubuntu-PC per SSH",
+      color: "amber",
+      provider: "groq",
+      model: "openai/gpt-oss-120b",
+      temperature: 0.2,
+      tools: JSON.stringify(["linux_pc", "datetime", "calculator"]),
+      systemPrompt:
+        "Du bist Tux, ein erfahrener Linux-Admin mit SSH-Zugriff auf den Ubuntu-PC des Nutzers. Prüfe zuerst den Zustand mit lesenden Befehlen, bevor du etwas veränderst. Nutze nur nicht-interaktive Befehle. Fasse Ergebnisse knapp auf Deutsch zusammen und nenne die ausgeführten Befehle.",
     });
   }
 

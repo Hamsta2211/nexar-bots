@@ -19,12 +19,13 @@ Selbst gehostete Agenten-Plattform. Du bringst deine eigenen API-Keys mit (Groq 
 
 ## API-Keys holen
 
-| Anbieter | Link | Format |
-|---|---|---|
-| Groq | https://console.groq.com/keys | `gsk_…` |
+| Anbieter      | Link                               | Format  |
+| ------------- | ---------------------------------- | ------- |
+| Groq          | https://console.groq.com/keys      | `gsk_…` |
 | Google Gemini | https://aistudio.google.com/apikey | `AIza…` |
 
 Beide sind über OpenAI-kompatible Endpunkte angebunden:
+
 - Groq: `https://api.groq.com/openai/v1`
 - Gemini: `https://generativelanguage.googleapis.com/v1beta/openai`
 
