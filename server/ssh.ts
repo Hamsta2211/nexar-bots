@@ -162,6 +162,80 @@ export function sshExec(command: string, opts: { timeoutMs?: number; bypassSafe?
   });
 }
 
+export function openSshShell(cols = 100, rows = 28): Promise<{ connection: any; stream: any; close: () => void }> {
+  const c = getSshConfig();
+  if (!c.host || !c.username || !(c.privateKey || c.password)) {
+    return Promise.reject(new Error("Kein PC verbunden. Richte die SSH-Verbindung unter \"Mein PC\" ein."));
+  }
+
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    let settled = false;
+    let hostKeyError: Error | null = null;
+    const timer = setTimeout(() => fail(new Error("Zeitüberschreitung beim Aufbau der SSH-Terminalverbindung.")), 15_000);
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      conn.end();
+      reject(error);
+    };
+
+    const baseOpts: any = {
+      host: c.host,
+      port: c.port || 22,
+      username: c.username,
+      readyTimeout: 15_000,
+      keepaliveInterval: 10_000,
+      ...(c.authType === "key"
+        ? { privateKey: c.privateKey, passphrase: c.passphrase || undefined }
+        : { password: c.password }),
+      hostVerifier: (key: Buffer) => {
+        const fingerprint = "SHA256:" + createHash("sha256").update(key).digest("base64").replace(/=+$/, "");
+        const known = storage.getSetting("ssh_hostkey");
+        if (!known) {
+          storage.setSetting("ssh_hostkey", fingerprint);
+          return true;
+        }
+        if (known !== fingerprint) {
+          hostKeyError = new Error(`Host-Key hat sich geändert (erwartet ${known}, erhalten ${fingerprint}). Falls du den PC neu aufgesetzt hast, setze den Fingerabdruck unter „Mein PC“ zurück.`);
+          return false;
+        }
+        return true;
+      },
+    };
+
+    const start = async () => {
+      try {
+        if (process.env.ALL_PROXY || process.env.SOCKS5_PROXY || process.env.TAILSCALE_SOCKS) {
+          baseOpts.sock = await createSocksSocket(c.host, c.port || 22);
+        }
+      } catch (error: any) {
+        if (!String(error?.message || error).includes("no socks")) console.warn("[ssh] SOCKS proxy skip:", error?.message || error);
+      }
+
+      conn.on("ready", () => {
+        const tty = { term: "xterm-256color", cols: Math.max(20, Math.min(250, cols)), rows: Math.max(5, Math.min(100, rows)), width: 0, height: 0 };
+        conn.shell(tty, (error, stream) => {
+          if (error) return fail(error);
+          if (settled) { stream.close(); return; }
+          settled = true;
+          clearTimeout(timer);
+          resolve({
+            connection: conn,
+            stream,
+            close: () => { stream.close(); conn.end(); },
+          });
+        });
+      }).on("error", (error) => fail(hostKeyError || new Error(`SSH-Fehler: ${error.message}`)));
+
+      conn.connect(baseOpts);
+    };
+
+    start().catch((error) => fail(error instanceof Error ? error : new Error(String(error))));
+  });
+}
+
 export async function systemInfo() {
   const script = [
     "echo HOST=$(hostname)",

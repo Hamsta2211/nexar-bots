@@ -98,15 +98,19 @@ Alternative ohne Docker: `nexar-bots.service` (systemd) liegt bei.
 4. Optional für Bots, die sudo brauchen: gezielte Befehle in `/etc/sudoers.d/nexar` mit `NOPASSWD` freigeben.
 
 Sicherheit: Host-Fingerabdruck wird beim ersten Verbinden gemerkt und danach geprüft. Der Sicherheitsmodus blockiert
-zerstörerische Befehle (`rm -rf /`, `mkfs`, `dd of=/dev/…`, Neustart, `curl | sh`). Jeder Befehl läuft in einer
-eigenen, nicht interaktiven SSH-Sitzung mit Zeitlimit.
+zerstörerische Befehle (`rm -rf /`, `mkfs`, `dd of=/dev/…`, Neustart, `curl | sh`) bei Bot-Befehlen. Das interaktive
+SSH-Terminal nutzt eine authentifizierte, kurzlebige WebSocket-Freigabe und eine PTY-Sitzung; dort laufen Befehle
+direkt auf dem PC und werden nicht vom Sicherheitsmodus gefiltert. Bot-Befehle laufen weiterhin in eigenen,
+nicht interaktiven SSH-Sitzungen mit Zeitlimit.
 
 ## Projektstruktur
 
 ```
-client/src/pages     Übersicht, Bots, Chat, Automationen, API-Keys, Hosting
+client/src/pages     Übersicht, Bots, Chat, Automationen, API-Keys, Mein PC, Sicherheit
+client/src/components/remote-terminal.tsx  xterm.js-Terminal für interaktive SSH-PTY-Sitzungen
 server/agent.ts      Provider-Anbindung, Werkzeuge, Agenten-Schleife
-server/ssh.ts        SSH-Verbindung, Sicherheitsmodus, Systeminfo
+server/ssh.ts        SSH-Verbindung, Sicherheitsmodus, Systeminfo, PTY-Shell
+server/terminal.ts   authentifizierte Terminal-Tickets und WebSocket-PTY-Bridge
 server/models.ts     Live-Modellkatalog (Groq + Gemini), Cache, Auto-Aktualisierung
 server/routes.ts     REST-API, Scheduler, Webhooks, Passwortschutz
 server/storage.ts    SQLite-Tabellen und Datenzugriff

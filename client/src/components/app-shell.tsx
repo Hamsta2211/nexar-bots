@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard, Bot as BotIcon, MessagesSquare, Mic, Timer, ListChecks, KeyRound, Server, Moon, Sun, Monitor, ShieldCheck, LogOut, Download } from "lucide-react";
+import { LayoutDashboard, Bot as BotIcon, MessagesSquare, Mic, Timer, ListChecks, KeyRound, Moon, Sun, Monitor, ShieldCheck, LogOut, Download } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu,
   SidebarMenuButton, SidebarMenuItem, SidebarHeader, SidebarFooter,
@@ -25,7 +25,6 @@ const NAV = [
   { href: "/pc", label: "Mein PC", icon: Monitor },
   { href: "/settings", label: "API-Keys", icon: KeyRound },
   { href: "/security", label: "Sicherheit", icon: ShieldCheck },
-  { href: "/hosting", label: "24/7 Hosting", icon: Server },
 ];
 
 export function AppSidebar() {

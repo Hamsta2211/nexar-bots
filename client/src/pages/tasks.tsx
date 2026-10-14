@@ -99,10 +99,10 @@ function TaskDialog({ open, onOpenChange, bots, task, onManageReminders }: { ope
   const pairedDevice = devices.find((device) => device.id === notificationDeviceId);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-1.5rem)] max-w-lg overflow-y-auto p-4 sm:max-h-[90vh] sm:w-full sm:p-6">
         <DialogHeader><DialogTitle>{task ? "Automation bearbeiten" : "Neue Automation"}</DialogTitle></DialogHeader>
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Bot</Label>
               <Select value={botId || String(bots[0]?.id ?? "")} onValueChange={setBotId}>
@@ -183,10 +183,10 @@ function TaskDialog({ open, onOpenChange, bots, task, onManageReminders }: { ope
             </div> : null}
           </div> : null}
         </div>
-        <DialogFooter>
-          {task ? <Button type="button" variant="outline" className="mr-auto" onClick={() => { onManageReminders(task); onOpenChange(false); }}><BellRing className="mr-2 h-4 w-4" />Erinnerungen</Button> : null}
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Abbrechen</Button>
-          <Button onClick={() => create.mutate()} disabled={!name.trim() || !prompt.trim() || !bots.length || (deliveryType === "nexar_notification" && !notificationDeviceId) || create.isPending} data-testid="button-save-task">{task ? "Speichern" : "Anlegen"}</Button>
+        <DialogFooter className="gap-2 sm:gap-0">
+          {task ? <Button type="button" variant="outline" className="mr-auto w-full sm:w-auto" onClick={() => { onManageReminders(task); onOpenChange(false); }}><BellRing className="mr-2 h-4 w-4" />Erinnerungen</Button> : null}
+          <Button variant="ghost" className="w-full sm:w-auto" onClick={() => onOpenChange(false)}>Abbrechen</Button>
+          <Button className="w-full sm:w-auto" onClick={() => create.mutate()} disabled={!name.trim() || !prompt.trim() || !bots.length || (deliveryType === "nexar_notification" && !notificationDeviceId) || create.isPending} data-testid="button-save-task">{task ? "Speichern" : "Anlegen"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -232,9 +232,22 @@ export default function Tasks() {
             <div className="px-4 py-10 text-center sm:px-6 sm:py-16"><p className="text-sm font-medium">Noch keine Automationen</p><p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">Beispiel: Ein Morgen-Briefing direkt als Vollbild auf dein Android-Gerät senden.</p><Button size="sm" className="mt-4" onClick={() => setOpen(true)} disabled={!bots.length}>Automation anlegen</Button></div>
           ) : <ul className="divide-y divide-border">{tasks.map((t) => {
             const b = bots.find((x) => x.id === t.botId); const mobile = t.deliveryType === "nexar_notification";
-            return <li key={t.id} className={`flex items-center gap-3 px-4 py-3 ${selected === t.id ? "bg-accent/60" : ""}`} data-testid={`row-task-${t.id}`}>
-              {b && <BotAvatar bot={b} size="sm" />}<button className="min-w-0 flex-1 text-left" onClick={() => setSelected(selected === t.id ? null : t.id)} data-testid={`button-select-task-${t.id}`}><div className="flex items-center gap-2 text-sm font-medium">{t.name}{mobile ? <BellRing className="h-3.5 w-3.5 text-primary" /> : t.webhookUrl ? <Webhook className="h-3.5 w-3.5 text-muted-foreground" /> : null}</div><div className="line-clamp-1 text-xs text-muted-foreground">{t.prompt}</div><div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{intervalLabel(t.intervalMinutes)} · zuletzt {ago(t.lastRunAt)} · nächster {t.enabled ? untilText(t.nextRunAt) : "pausiert"}</div></button>
-              <Button size="sm" variant="outline" onClick={() => setReminderTask(t)} aria-label={`Erinnerungen für ${t.name}`}><BellRing className="mr-1.5 h-3.5 w-3.5" />Erinnerungen</Button><Button size="icon" variant="ghost" onClick={() => { setEditing(t); setOpen(true); }} aria-label="Bearbeiten"><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => run.mutate(t.id)} disabled={run.isPending && run.variables === t.id} aria-label="Jetzt ausführen" data-testid={`button-run-${t.id}`}>{run.isPending && run.variables === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}</Button><Switch checked={t.enabled} onCheckedChange={(enabled) => toggle.mutate({ id: t.id, enabled })} aria-label="Aktiv" data-testid={`switch-task-${t.id}`} /><Button size="icon" variant="ghost" onClick={() => del.mutate(t.id)} aria-label="Löschen" data-testid={`button-del-task-${t.id}`}><Trash2 className="h-4 w-4" /></Button>
+            return <li key={t.id} className={`flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:gap-3 sm:px-4 ${selected === t.id ? "bg-accent/60" : ""}`} data-testid={`row-task-${t.id}`}>
+              <div className="flex min-w-0 items-start gap-3 sm:flex-1 sm:items-center">
+                {b && <BotAvatar bot={b} size="sm" />}
+                <button className="min-w-0 flex-1 text-left" onClick={() => setSelected(selected === t.id ? null : t.id)} data-testid={`button-select-task-${t.id}`}>
+                  <div className="flex items-center gap-2 text-sm font-medium"><span className="truncate">{t.name}</span>{mobile ? <BellRing className="h-3.5 w-3.5 shrink-0 text-primary" /> : t.webhookUrl ? <Webhook className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : null}</div>
+                  <div className="line-clamp-1 text-xs text-muted-foreground">{t.prompt}</div>
+                  <div className="mt-0.5 font-mono text-[11px] leading-4 text-muted-foreground">{intervalLabel(t.intervalMinutes)} · zuletzt {ago(t.lastRunAt)} · nächster {t.enabled ? untilText(t.nextRunAt) : "pausiert"}</div>
+                </button>
+              </div>
+              <div className="flex shrink-0 items-center justify-end gap-0.5 border-t border-border/70 pt-2 sm:border-0 sm:pt-0">
+                <Button size="sm" variant="outline" className="h-8 px-2 text-xs sm:h-9 sm:px-3 sm:text-sm" onClick={() => setReminderTask(t)} aria-label={`Erinnerungen für ${t.name}`}><BellRing className="mr-1 h-3.5 w-3.5" />Erinnerungen</Button>
+                <Button size="icon" variant="ghost" className="h-8 w-8 sm:h-9 sm:w-9" onClick={() => { setEditing(t); setOpen(true); }} aria-label="Bearbeiten"><Pencil className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" className="h-8 w-8 sm:h-9 sm:w-9" onClick={() => run.mutate(t.id)} disabled={run.isPending && run.variables === t.id} aria-label="Jetzt ausführen" data-testid={`button-run-task-${t.id}`}>{run.isPending && run.variables === t.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}</Button>
+                <Switch checked={t.enabled} onCheckedChange={(enabled) => toggle.mutate({ id: t.id, enabled })} aria-label="Aktiv" data-testid={`switch-task-${t.id}`} />
+                <Button size="icon" variant="ghost" className="h-8 w-8 sm:h-9 sm:w-9" onClick={() => del.mutate(t.id)} aria-label="Löschen" data-testid={`button-del-task-${t.id}`}><Trash2 className="h-4 w-4" /></Button>
+              </div>
             </li>;
           })}</ul>}
         </section>

@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import { registerRoutes } from "./routes";
 import { registerStreamRoutes } from "./stream";
 import { registerPwaRoutes } from "./pwa";
+import { registerTerminalRoutes } from "./terminal";
 import { registerVoiceRoutes } from "./voice";
 import { registerJobRoutes } from "./jobs";
 import { serveStatic } from "./static";
@@ -79,6 +80,7 @@ app.use((req, res, next) => {
 
 (async () => {
   await registerRoutes(httpServer, app);
+  registerTerminalRoutes(httpServer, app);
   // Streaming-Chat, Sprachausgabe (Python/edge-tts) und App-Icons
   registerStreamRoutes(app);
   registerVoiceRoutes(app);

@@ -20,7 +20,6 @@ const Jobs = lazy(() => import("@/pages/jobs"));
 const JobDetail = lazy(() => import("@/pages/job-detail"));
 const Tasks = lazy(() => import("@/pages/tasks"));
 const Settings = lazy(() => import("@/pages/settings"));
-const Hosting = lazy(() => import("@/pages/hosting"));
 const MyPc = lazy(() => import("@/pages/pc"));
 const Security = lazy(() => import("@/pages/security"));
 
@@ -38,7 +37,6 @@ function AppRouter() {
         <Route path="/jobs/:id" component={JobDetail} />
         <Route path="/tasks" component={Tasks} />
         <Route path="/settings" component={Settings} />
-        <Route path="/hosting" component={Hosting} />
         <Route path="/pc" component={MyPc} />
         <Route path="/security" component={Security} />
         <Route component={NotFound} />
