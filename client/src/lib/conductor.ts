@@ -1,7 +1,7 @@
 // Gesprächsablauf des Voice-Chats als reine Zustandsmaschine (frameweise getaktet, daher ohne Browser testbar).
 import { FRAME_MS, Vad, concatFrames } from "./audio-utils";
 
-export type Phase = "off" | "listening" | "armed" | "greeting" | "capturing" | "transcribing" | "thinking" | "speaking";
+export type Phase = "off" | "listening" | "greeting" | "capturing" | "transcribing" | "thinking" | "speaking";
 
 export type Fx = {
   greet: (agentId: number) => void;                                              // „Ja“ sprechen, danach greetDone()
@@ -22,23 +22,23 @@ export type Snapshot = {
 
 export type Cfg = {
   endSilenceMs: number;        // Stille, nach der gesendet wird (2000)
+  nameEndSilenceMs: number;    // kurze Stille vor dem Transkribieren eines Gruppen-Agentennamens
   followupMs: number;          // wie lange nach einer Rückfrage auf den Sprecher gewartet wird (2000)
   commandWaitMs: number;       // nach „Ja“: maximale Wartezeit auf den Befehl
-  armMs: number;               // nach Hotword: so lange auf direkt weitersprechen warten, bevor „Ja“ kommt
   minSpeechMs: number;
   maxUtteranceMs: number;
   solo: boolean;               // fester Agent, Dauergespräch ohne Namen
-  nameFallback: boolean;       // Namen per Spracherkennung suchen (für Agenten ohne Hotword-Modell)
+  nameFallback: boolean;       // im Gruppenmodus Agentennamen per Spracherkennung erkennen
 };
 
 export const DEFAULT_CFG: Cfg = {
-  endSilenceMs: 1850, followupMs: 2000, commandWaitMs: 8000, armMs: 400, minSpeechMs: 350, maxUtteranceMs: 45_000,
+  endSilenceMs: 3000, nameEndSilenceMs: 1000, followupMs: 2000, commandWaitMs: 8000, minSpeechMs: 220, maxUtteranceMs: 45_000,
   solo: false, nameFallback: false,
 };
 
 type Cap = {
   began: boolean; frames: Int16Array[]; speechMs: number; lastSpeechT: number; startT: number;
-  waitMs: number | null; inline: boolean; purpose: "command" | "name";
+  waitMs: number | null; purpose: "command" | "name";
 };
 
 export class Conductor {
@@ -48,7 +48,6 @@ export class Conductor {
   private vad = new Vad();
   private ring: Int16Array[] = [];
   private cap: Cap | null = null;
-  private armedAt = 0;
   private req = 0;
   private followup = false;
   private lastSnap = "";
@@ -65,26 +64,9 @@ export class Conductor {
   }
   stop() { this.phase = "off"; this.target = null; this.cap = null; this.followup = false; this.req++; this.emit(true); }
 
-  /** Soll der Hotword-Dienst gerade Audio bekommen? */
-  wantsWake() {
-    return !this.cfg.solo && (this.phase === "listening" || this.phase === "armed" || this.phase === "capturing");
-  }
-  micActive() { return this.phase === "listening" || this.phase === "armed" || this.phase === "capturing"; }
+  micActive() { return this.phase === "listening" || this.phase === "capturing"; }
 
   // ---------- Ereignisse von außen ----------
-  onHit(agentId: number) {
-    if (this.cfg.solo) return;
-    if (!["listening", "armed", "capturing"].includes(this.phase)) return;
-    if (this.phase === "capturing" && this.target === agentId && this.cap?.began && this.cap.purpose === "command") return;
-    if (this.phase === "armed" && this.target === agentId) return;
-    this.target = agentId;
-    this.followup = false;
-    this.cap = null;
-    this.armedAt = this.t;
-    this.setPhase("armed");
-    if (this.vad.inSpeech) this.beginInline();
-  }
-
   greetDone() {
     if (this.phase !== "greeting") return;
     this.vad.reset();
@@ -94,7 +76,6 @@ export class Conductor {
   transcribed(req: number, text: string) {
     if (req !== this.req || this.phase !== "transcribing") return;
     const purpose = this.cap?.purpose || "command";
-    const inline = !!this.cap?.inline;
     this.cap = null;
     text = text.trim();
     if (!text) {
@@ -104,14 +85,14 @@ export class Conductor {
     const f0 = this.cfg.solo ? null : this.find(text);
     const f = f0 && f0.idx <= (purpose === "name" ? 3 : 2) ? f0 : null;
     if (purpose === "name") {
-      if (!f) { this.fx.note("Kein Agentenname erkannt."); return this.backToIdle(); }
+      if (!f) return this.backToIdle();
       this.target = f.id;
       return f.rest ? this.askNow(f.rest) : this.greet();
     }
     // Befehl für den aktuellen Ziel-Agenten; ein genannter anderer Name ersetzt das Ziel
-    if (f && (f.id !== this.target || inline)) { this.target = f.id; text = f.rest; }
+    if (f && f.id !== this.target) { this.target = f.id; text = f.rest; }
     else if (f && f.id === this.target) text = f.rest || text;
-    if (!text.trim()) return inline || !this.cfg.solo ? this.greet() : this.beginWaiting("command", null);
+    if (!text.trim()) return this.cfg.solo ? this.beginWaiting("command", null) : this.greet();
     this.askNow(text);
   }
 
@@ -139,11 +120,6 @@ export class Conductor {
     this.ring.push(f);
     if (this.ring.length > 150) this.ring.shift();
 
-    if (this.phase === "armed") {
-      if (v.speech) this.beginInline();
-      else if (this.t - this.armedAt >= this.cfg.armMs) return this.greet();
-      return this.emit();
-    }
     if (this.phase === "listening" && !this.cfg.nameFallback) return this.emit();
     if (this.phase === "listening" && !this.cap) this.beginWaiting("name", null);
     const c = this.cap;
@@ -152,7 +128,7 @@ export class Conductor {
     if (!c.began) {
       if (this.vad.speechRun >= 3) {
         c.began = true;
-        c.frames = this.ring.slice(-Math.ceil((c.inline ? 2000 : 400) / FRAME_MS));
+        c.frames = this.ring.slice(-Math.ceil(400 / FRAME_MS));
         c.startT = this.t; c.lastSpeechT = this.t; c.speechMs = 0;
       } else if (c.waitMs != null && this.t - c.startT >= c.waitMs) {
         this.fx.note(this.followup ? "" : "Keine Eingabe.");
@@ -163,7 +139,8 @@ export class Conductor {
     c.frames.push(f);
     if (v.speech) { c.lastSpeechT = this.t; c.speechMs += FRAME_MS; }
     const silence = this.t - c.lastSpeechT;
-    if (silence >= this.cfg.endSilenceMs || this.t - c.startT >= this.cfg.maxUtteranceMs) {
+    const endSilenceMs = c.purpose === "name" ? this.cfg.nameEndSilenceMs : this.cfg.endSilenceMs;
+    if (silence >= endSilenceMs || this.t - c.startT >= this.cfg.maxUtteranceMs) {
       if (c.speechMs < this.cfg.minSpeechMs) {            // nur ein Geräusch: weiter warten
         this.cap = null;
         if (this.cfg.solo || this.phase === "capturing") this.beginWaiting(c.purpose, c.waitMs == null ? null : Math.max(500, c.waitMs - (this.t - c.startT)));
@@ -183,12 +160,8 @@ export class Conductor {
 
   // ---------- intern ----------
   private beginWaiting(purpose: "command" | "name", waitMs: number | null) {
-    this.cap = { began: false, frames: [], speechMs: 0, lastSpeechT: this.t, startT: this.t, waitMs, inline: false, purpose };
+    this.cap = { began: false, frames: [], speechMs: 0, lastSpeechT: this.t, startT: this.t, waitMs, purpose };
     this.setPhase(purpose === "name" ? "listening" : "capturing");
-  }
-  private beginInline() {
-    this.cap = { began: true, frames: this.ring.slice(-Math.ceil(2000 / FRAME_MS)), speechMs: 0, lastSpeechT: this.t, startT: this.t, waitMs: null, inline: true, purpose: "command" };
-    this.setPhase("capturing");
   }
   private greet() {
     this.cap = null;
@@ -213,10 +186,11 @@ export class Conductor {
     const c = this.cap;
     const recording = !!c?.began;
     const silenceMs = recording ? this.t - c!.lastSpeechT : 0;
+    const endSilenceMs = c?.purpose === "name" ? this.cfg.nameEndSilenceMs : this.cfg.endSilenceMs;
     const waiting = !!c && !c.began && c.waitMs != null;
     const snap: Snapshot = {
       phase: this.phase, target: this.target, recording, silenceMs,
-      endInMs: recording ? Math.max(0, this.cfg.endSilenceMs - silenceMs) : waiting ? Math.max(0, c!.waitMs! - (this.t - c!.startT)) : null,
+      endInMs: recording ? Math.max(0, endSilenceMs - silenceMs) : waiting ? Math.max(0, c!.waitMs! - (this.t - c!.startT)) : null,
       level: this.vad.level, followup: this.followup,
     };
     const key = `${snap.phase}|${snap.target}|${snap.recording}|${Math.round(snap.silenceMs / 100)}|${Math.round(snap.level * 40)}|${snap.followup}|${snap.endInMs == null ? "" : Math.round(snap.endInMs / 100)}`;

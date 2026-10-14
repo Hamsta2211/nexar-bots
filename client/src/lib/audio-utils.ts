@@ -57,13 +57,13 @@ export class Vad {
   speechRun = 0;     // aufeinanderfolgende Sprach-Frames
   hang = 0;          // Nachlauf in Frames
   level = 0;
-  constructor(private hangFrames = 8, private minOn = 0.016) {}
+  constructor(private hangFrames = 8, private minOn = 0.009) {}
 
   process(f: Int16Array): { speech: boolean; level: number } {
     const r = rms(f);
     this.level = r;
-    const on = Math.max(this.minOn, this.floor * 3.2);
-    const off = Math.max(this.minOn * 0.65, this.floor * 2.0);
+    const on = Math.max(this.minOn, this.floor * 2.6);
+    const off = Math.max(this.minOn * 0.58, this.floor * 1.7);
     const loud = this.inSpeech ? r > off : r > on;
     if (loud) {
       this.speechRun++;

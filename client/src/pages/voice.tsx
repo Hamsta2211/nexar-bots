@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "wouter";
 import { motion } from "framer-motion";
-import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Send, Settings2, Users, Volume2, Smile, Radio } from "lucide-react";
+import { ArrowLeft, Mic, MicOff, Phone, PhoneOff, Send, Settings2, Users, Volume2, Smile } from "lucide-react";
 import type { Bot } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { apiRequest } from "@/lib/queryClient";
@@ -10,9 +10,8 @@ import { streamChat } from "@/lib/stream";
 import { TtsPlayer } from "@/lib/voice";
 import { Mic as MicIn } from "@/lib/mic";
 import { Conductor, DEFAULT_CFG, type Snapshot } from "@/lib/conductor";
-import { WakeFeeder, getWakeStatus, transcribe, type WakeStatus } from "@/lib/wake-client";
+import { transcribe } from "@/lib/stt-client";
 import { FaceEditor, useFaces } from "@/components/face-editor";
-import { WakeTrainer } from "@/components/wake-trainer";
 import { findAgent, speakable, takeSpeakable } from "@/lib/speech-utils";
 import { AgentFace, FaceStyles, faceFor, type FaceCfg } from "@/components/agent-face";
 
@@ -106,6 +105,8 @@ function Tile({ bot, index, state, big, dim, compact, solo, cfg, countdown, thou
 
 const FOLLOW_KEY = "nexar_followup_ms";
 const readFollow = () => { try { return Number(localStorage.getItem(FOLLOW_KEY)) || 2000; } catch { return 2000; } };
+const END_SILENCE_KEY = "nexar_end_silence_ms";
+const readEndSilence = () => { try { const value = Number(localStorage.getItem(END_SILENCE_KEY)); return [2000, 3000, 4000].includes(value) ? value : DEFAULT_CFG.endSilenceMs; } catch { return DEFAULT_CFG.endSilenceMs; } };
 
 export default function VoicePage() {
   const params = useParams<{ id?: string }>();
@@ -113,7 +114,6 @@ export default function VoicePage() {
   const qc = useQueryClient();
   const { data: allBots } = useQuery<Bot[]>({ queryKey: ["/api/bots"] });
   const { data: vinfo, refetch: refetchVoices } = useQuery<VoiceInfo>({ queryKey: ["/api/tts/voices"], staleTime: 30_000 });
-  const { data: wake, refetch: refetchWake } = useQuery<WakeStatus>({ queryKey: ["/api/wake/status"], queryFn: getWakeStatus, staleTime: 15_000, retry: false });
   const faces = useFaces();
   const agents = useMemo(() => (allBots || []).filter((b) => (soloId ? b.id === soloId : true)), [allBots, soloId]);
 
@@ -128,12 +128,11 @@ export default function VoicePage() {
   const [typed, setTyped] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [followMs, setFollowMs] = useState(readFollow);
+  const [endSilenceMs, setEndSilenceMs] = useState(readEndSilence);
   const [faceBot, setFaceBot] = useState<Bot | null>(null);
-  const [wakeBot, setWakeBot] = useState<Bot | null>(null);
 
   const player = useRef<TtsPlayer | null>(null);
   const micRef = useRef<MicIn | null>(null);
-  const feeder = useRef<WakeFeeder | null>(null);
   const cond = useRef<Conductor | null>(null);
   const convIds = useRef(new Map<number, number>());
   const abortRef = useRef<AbortController | null>(null);
@@ -141,16 +140,11 @@ export default function VoicePage() {
   const micOnRef = useRef(true);
   const agentsRef = useRef<Bot[]>([]);
   const voicesRef = useRef<Record<string, string>>({});
-  const wakeRef = useRef<WakeStatus | undefined>(undefined);
   const liveRef = useRef(false);
   agentsRef.current = agents;
   voicesRef.current = vinfo?.assignments || {};
-  wakeRef.current = wake;
   micOnRef.current = micOn;
   liveRef.current = live;
-
-  const trainedIds = useMemo(() => new Set(Object.entries(wake?.agents || {}).filter(([, a]) => a.trained).map(([id]) => Number(id))), [wake]);
-  const wakeAvail = !!wake?.available;
 
   const ensurePlayer = () => {
     if (!player.current) {
@@ -235,16 +229,22 @@ export default function VoicePage() {
       ...DEFAULT_CFG,
       solo: !!soloId,
       followupMs: followMs,
-      nameFallback: !soloId && (!wakeRef.current?.available || agentsRef.current.some((b) => !wakeRef.current?.agents?.[String(b.id)]?.trained)),
+      endSilenceMs,
+      nameFallback: !soloId,
     };
     const c = new Conductor({
       greet,
-      transcribe: (pcm, _purpose, req) => {
-        transcribe(pcm, hintNames()).then((t) => { if (t) setHeard(t); c.transcribed(req, t); })
+      transcribe: (pcm, purpose, req) => {
+        transcribe(pcm, hintNames()).then((t) => {
+          const wakeMatch = purpose === "name" && findAgent(t, agentsRef.current.map((b) => ({ id: b.id, name: b.name })));
+          if (t && (purpose === "command" || !!soloId || wakeMatch)) setHeard(t);
+          else if (purpose === "name") setHeard("");
+          c.transcribed(req, t);
+        })
           .catch((e) => { setHint(`Spracherkennung: ${e?.message || e}`); c.transcribed(req, ""); });
       },
       ask: (id, text) => { const b = agentsRef.current.find((x) => x.id === id); if (b) void ask(b, text); else c.agentFailed(); },
-      change: (s) => { setSnap(s); feeder.current?.setActive(c.wantsWake() && micOnRef.current); },
+      change: (s) => { setSnap(s); },
       note: (m) => { if (m) setHint(m); else setHint(""); },
     }, cfg, (t) => findAgent(t, agentsRef.current.map((b) => ({ id: b.id, name: b.name }))));
     return c;
@@ -254,8 +254,6 @@ export default function VoicePage() {
     if (!agents.length) return;
     ensurePlayer().unlock();
     void refetchVoices();
-    const st = (await refetchWake().catch(() => null))?.data;
-    wakeRef.current = st || wakeRef.current;
     setHint("");
     try {
       const mic = new MicIn();
@@ -267,20 +265,10 @@ export default function VoicePage() {
     }
     const c = buildConductor();
     cond.current = c;
-    const f = new WakeFeeder();
-    f.onHit = (id) => {
-      if (!agentsRef.current.some((b) => b.id === id)) return;
-      const b = agentsRef.current.find((x) => x.id === id)!;
-      setHint(`„${b.name}“ erkannt`);
-      c.onHit(id);
-    };
-    f.onUnavailable = () => { setHint("Hotword-Dienst nicht erreichbar – Namen werden per Spracherkennung gesucht."); c.cfg.nameFallback = true; };
-    feeder.current = f;
     if (micRef.current) {
       micRef.current.onFrame = (fr) => {
         if (!micOnRef.current) return;
         c.frame(fr);
-        f.push(fr);
       };
     }
     setLive(true);
@@ -292,7 +280,6 @@ export default function VoicePage() {
     abortRef.current = null;
     idleCb.current = null;
     player.current?.stop();
-    feeder.current?.setActive(false);
     micRef.current?.stop();
     micRef.current = null;
     cond.current?.stop();
@@ -305,7 +292,7 @@ export default function VoicePage() {
     setThought("");
   };
 
-  const toggleMic = () => { const n = !micOn; setMicOn(n); micOnRef.current = n; if (!n) feeder.current?.setActive(false); else if (cond.current) feeder.current?.setActive(cond.current.wantsWake()); };
+  const toggleMic = () => { const n = !micOn; setMicOn(n); micOnRef.current = n; };
 
   const submitTyped = (raw: string) => {
     const text = raw.trim();
@@ -338,6 +325,7 @@ export default function VoicePage() {
   };
 
   const setFollow = (ms: number) => { setFollowMs(ms); try { localStorage.setItem(FOLLOW_KEY, String(ms)); } catch {} if (cond.current) cond.current.cfg.followupMs = ms; };
+  const setSilence = (ms: number) => { setEndSilenceMs(ms); try { localStorage.setItem(END_SILENCE_KEY, String(ms)); } catch {} if (cond.current) cond.current.cfg.endSilenceMs = ms; };
 
   useEffect(() => { end(); }, [soloId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { abortRef.current?.abort(); player.current?.stop(); micRef.current?.stop(); }, []);
@@ -355,7 +343,7 @@ export default function VoicePage() {
     if (!live || !snap || snap.endInMs == null) return null;
     if (snap.recording) {
       if (snap.silenceMs < 250) return null;
-      return { ms: snap.endInMs, total: DEFAULT_CFG.endSilenceMs, label: `Ich sende in ${(snap.endInMs / 1000).toFixed(1)} s, wenn du nichts mehr sagst` };
+      return { ms: snap.endInMs, total: endSilenceMs, label: `Ich sende nach ${(endSilenceMs / 1000).toFixed(1)} s Stille` };
     }
     if (snap.followup) return { ms: snap.endInMs, total: followMs, label: "Antwort erwartet – sprich jetzt" };
     return null;
@@ -364,7 +352,7 @@ export default function VoicePage() {
     : phase === "speaking" ? "1 spricht"
     : phase === "thinking" ? "1 denkt nach"
     : phase === "transcribing" ? "versteht …"
-    : phase === "greeting" || phase === "armed" ? "Name erkannt"
+    : phase === "greeting" ? "Name erkannt"
     : phase === "capturing" ? (snap?.recording ? "nimmt auf" : "hört zu")
     : soloId ? "hört zu" : "wartet auf einen Namen";
   const voices = vinfo?.voices || [];
@@ -378,7 +366,6 @@ export default function VoicePage() {
     <div className="flex h-full flex-col">
       <FaceStyles />
       <FaceEditor bot={faceBot} open={!!faceBot} onClose={() => setFaceBot(null)} />
-      <WakeTrainer bot={wakeBot} open={!!wakeBot} onClose={() => { setWakeBot(null); void refetchWake(); }} serviceUp={!!wake?.serviceUp} />
       <div className="flex items-center gap-3 border-b border-border px-4 py-3 sm:px-6">
         <Link href={soloId ? `/chat/${soloId}` : "/chat"}>
           <Button variant="ghost" size="icon" aria-label="Zurück" data-testid="button-voice-back"><ArrowLeft className="h-4 w-4" /></Button>
@@ -407,10 +394,9 @@ export default function VoicePage() {
           {settingsOpen && (
             <div className="mb-4 rounded-xl border border-border bg-card p-3">
               <div className="mb-1 text-sm font-medium">Agenten</div>
-              <p className="mb-2 text-xs text-muted-foreground">Stimme (Microsoft), Gesicht und – für den Gruppen-Chat – das Hotword jedes Agenten.</p>
+              <p className="mb-2 text-xs text-muted-foreground">Stimme (Microsoft) und Gesicht. Im Gruppen-Chat erkennt die Spracherkennung Agentennamen automatisch – ohne individuelles Hotword-Training.</p>
               {agents.map((b, i) => {
                 const cur = vinfo?.assignments?.[String(b.id)] || "";
-                const trained = trainedIds.has(b.id);
                 return (
                   <div key={b.id} className="flex flex-wrap items-center gap-2 py-1.5">
                     <div className="w-9 shrink-0"><AgentFace look={faceFor(b.name, b.id, faces[String(b.id)])} laptop={false} title={b.name} /></div>
@@ -434,23 +420,27 @@ export default function VoicePage() {
                     <Button size="icon" variant="outline" onClick={() => setFaceBot(b)} aria-label={`Gesicht von ${b.name} anpassen`} data-testid={`button-face-${b.id}`}>
                       <Smile className="h-4 w-4" />
                     </Button>
-                    {!soloId && (
-                      <Button size="sm" variant={trained ? "outline" : "default"} onClick={() => setWakeBot(b)} data-testid={`button-wake-${b.id}`}>
-                        <Radio className="mr-1.5 h-3.5 w-3.5" />{trained ? "Hotword ✓" : "Hotword trainieren"}
-                      </Button>
-                    )}
                   </div>
                 );
               })}
+              <div className="mt-2 border-t border-border pt-2">
+                <div className="mb-1 text-xs font-medium">Befehl senden nach erkannter Stille</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {[2000, 3000, 4000].map((ms) => (
+                    <button key={ms} type="button" onClick={() => setSilence(ms)} className={`rounded-md border px-2 py-1 text-xs ${endSilenceMs === ms ? "border-[#6e92bd] bg-[#6e92bd]/15 text-foreground" : "border-border text-muted-foreground"}`}>
+                      {(ms / 1000).toFixed(0)} s
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen im Gruppen-Chat werden nach etwa 1 Sekunde Pause geprüft.</p>
+              </div>
               {!soloId && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
                   <span>Wartezeit auf deine Antwort nach einer Rückfrage:</span>
                   {[2000, 4000, 8000].map((ms) => (
                     <button key={ms} type="button" onClick={() => setFollow(ms)} className={`rounded-md border px-2 py-0.5 ${followMs === ms ? "border-[#6e92bd] bg-[#6e92bd]/15 text-foreground" : "border-border"}`}>{ms / 1000} s</button>
                   ))}
-                  <span className="basis-full">
-                    Hotword-Dienst: {wake ? (wake.available ? "bereit" : wake.serviceUp ? "startet …" : "nicht erreichbar (läuft nur auf dem Server)") : "…"}. Agenten ohne Hotword-Training werden über die Spracherkennung am Namen erkannt.
-                  </span>
+                  <span className="basis-full">Wake-up: lokale VAD sammelt kurze Sprachsegmente; der Gruppen-Agentenname wird nach etwa 1 Sekunde Pause über Render an Groq Whisper geprüft. Die Mikrofonseite muss geöffnet bleiben; im Hintergrund bei geschlossener App läuft es nicht.</span>
                 </div>
               )}
             </div>
@@ -483,7 +473,7 @@ export default function VoicePage() {
           <div className="mt-4 min-h-[3.5rem] space-y-1.5 text-center" aria-live="polite">
             {!live && agents.length > 0 && (
               <p className="text-sm text-muted-foreground">
-                {soloId ? "Starte den Anruf und sprich los. Gesendet wird, wenn du 2 Sekunden nichts mehr sagst." : `Starte den Anruf und sag zum Beispiel „${agents[0].name}“ – dann antwortet er mit „Ja“ und du sprichst deine Frage.`}
+                {soloId ? `Starte den Anruf und sprich los. Gesendet wird nach ${endSilenceMs / 1000} Sekunden Stille.` : `Starte den Anruf und sag zum Beispiel „${agents[0].name}“ – dann antwortet er mit „Ja“. Gesendet wird nach ${endSilenceMs / 1000} Sekunden Stille.`}
               </p>
             )}
             {hint && <p className="text-xs text-muted-foreground" data-testid="text-voice-hint">{hint}</p>}

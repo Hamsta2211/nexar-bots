@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import { registerRoutes } from "./routes";
 import { registerStreamRoutes } from "./stream";
 import { registerPwaRoutes } from "./pwa";
-import { registerWakeRoutes } from "./wake";
+import { registerVoiceRoutes } from "./voice";
 import { registerJobRoutes } from "./jobs";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
@@ -62,10 +62,10 @@ app.use((req, res, next) => {
 
   res.on("finish", () => {
     const duration = Date.now() - start;
-    if (path.startsWith("/api") && path !== "/api/wake/feed") {
+    if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      // Keine Antwortinhalte loggen bei Anmeldung, Keys und SSH (enthält Tokens/Geheimnisse)
-      if (capturedJsonResponse && !/^\/api\/(auth|keys|ssh)/.test(path)) {
+      // Keine Antwortinhalte loggen bei Anmeldung, Keys, SSH oder STT (enthält Geheimnisse bzw. Transkripte)
+      if (capturedJsonResponse && !/^\/api\/(auth|keys|ssh|stt)/.test(path)) {
         const j = JSON.stringify(capturedJsonResponse);
         logLine += ` :: ${j.length > 200 ? j.slice(0, 200) + "…" : j}`;
       }
@@ -81,7 +81,7 @@ app.use((req, res, next) => {
   await registerRoutes(httpServer, app);
   // Streaming-Chat, Sprachausgabe (Python/edge-tts) und App-Icons
   registerStreamRoutes(app);
-  registerWakeRoutes(app);
+  registerVoiceRoutes(app);
   registerJobRoutes(app);
   registerPwaRoutes(app);
 
