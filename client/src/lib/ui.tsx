@@ -59,9 +59,9 @@ export function intervalLabel(min: number) {
 
 export function PageHeader({ title, sub, children }: { title: string; sub?: string; children?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border px-6 py-5">
+    <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border px-4 py-3 sm:gap-4 sm:px-6 sm:py-5">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight" data-testid="text-page-title">{title}</h1>
+        <h1 className="text-lg font-semibold tracking-tight sm:text-xl" data-testid="text-page-title">{title}</h1>
         {sub && <p className="mt-1 text-sm text-muted-foreground">{sub}</p>}
       </div>
       <div className="flex items-center gap-2">{children}</div>

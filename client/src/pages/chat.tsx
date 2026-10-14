@@ -141,10 +141,10 @@ export default function Chat() {
     if (t && !sending) void run(t);
   };
 
-  if (botsLoading) return <div className="p-6"><Skeleton className="h-96 w-full" /></div>;
+  if (botsLoading) return <div className="p-3 sm:p-6"><Skeleton className="h-96 w-full" /></div>;
   if (!bots?.length || !bot) {
     return (
-      <div className="grid h-full place-items-center p-6 text-center">
+      <div className="grid h-full place-items-center p-3 text-center sm:p-6">
         <div>
           <p className="text-sm text-muted-foreground">Kein Bot vorhanden.</p>
           <Link href="/bots"><Button className="mt-3" size="sm">Bot erstellen</Button></Link>
@@ -181,7 +181,7 @@ export default function Chat() {
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b border-border px-5 py-3">
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2.5 sm:gap-3 sm:px-5 sm:py-3">
           <BotAvatar bot={bot} />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold" data-testid="text-chat-bot">{bot.name}</div>
@@ -202,9 +202,9 @@ export default function Chat() {
         </div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-3xl space-y-6 px-5 py-6">
+          <div className="mx-auto max-w-3xl space-y-4 px-3 py-4 sm:space-y-6 sm:px-5 sm:py-6">
             {!shown.length && !pending && (
-              <div className="py-10 text-center">
+              <div className="py-6 text-center sm:py-10">
                 <div className="flex justify-center"><BotAvatar bot={bot} size="lg" /></div>
                 <h2 className="mt-3 font-semibold">Chat mit {bot.name}</h2>
                 <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">{bot.description}</p>

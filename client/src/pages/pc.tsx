@@ -152,8 +152,8 @@ export default function MyPc() {
         )}
       </PageHeader>
 
-      <div className="space-y-6 p-6">
-        <div className="grid gap-6 xl:grid-cols-[24rem_1fr]">
+      <div className="space-y-4 p-3 sm:space-y-6 sm:p-6">
+        <div className="grid gap-4 sm:gap-6 xl:grid-cols-[24rem_1fr]">
           {/* Verbindung */}
           <div className="space-y-6">
             <section className="rounded-lg border border-card-border bg-card">

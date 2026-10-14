@@ -93,8 +93,8 @@ export default function JobDetailPage() {
     setAgentsOpen(false);
   };
 
-  if (isLoading) return <div className="p-6"><Skeleton className="h-64 w-full" /></div>;
-  if (!job) return <div className="p-6 text-sm text-muted-foreground">Aufgabe nicht gefunden. <Link href="/jobs" className="underline">Zurück</Link></div>;
+  if (isLoading) return <div className="p-3 sm:p-6"><Skeleton className="h-64 w-full" /></div>;
+  if (!job) return <div className="p-3 text-sm text-muted-foreground sm:p-6">Aufgabe nicht gefunden. <Link href="/jobs" className="underline">Zurück</Link></div>;
 
   return (
     <div className="flex h-full flex-col">
@@ -112,7 +112,7 @@ export default function JobDetailPage() {
       </div>
 
       {!agents.length ? (
-        <div className="grid flex-1 place-items-center p-6 text-center text-sm text-muted-foreground">
+        <div className="grid flex-1 place-items-center p-3 text-center text-sm text-muted-foreground sm:p-6">
           <div>Dieser Aufgabe ist noch kein Agent zugeordnet.<div className="mt-3"><Button size="sm" onClick={() => { setPick([]); setAgentsOpen(true); }}>Agenten hinzufügen</Button></div></div>
         </div>
       ) : (
@@ -144,14 +144,14 @@ export default function JobDetailPage() {
 
             <section className="flex min-w-0 flex-1 flex-col">
               <div className="flex-1 overflow-y-auto">
-                <div className="mx-auto max-w-3xl space-y-6 px-5 py-6">
+                <div className="mx-auto max-w-3xl space-y-4 px-3 py-4 sm:space-y-6 sm:px-5 sm:py-6">
                   {chats.length > 0 && (
                     <div className="flex gap-1.5 overflow-x-auto md:hidden">
                       {chats.map((c) => <button key={c.id} onClick={() => setConvId(c.id)} className={`shrink-0 rounded-md border px-2 py-1 text-xs ${c.id === convId ? "border-primary/50" : "border-border text-muted-foreground"}`}>{c.title.slice(0, 24)}</button>)}
                     </div>
                   )}
                   {!convId && bot && (
-                    <div className="py-10 text-center">
+                    <div className="py-6 text-center sm:py-10">
                       <div className="flex justify-center"><BotAvatar bot={bot} size="lg" /></div>
                       <h2 className="mt-3 font-semibold">{bot.name} · {job.title}</h2>
                       <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">Schreibe einen Auftrag. {bot.name} arbeitet auf dem Server im Hintergrund weiter, auch wenn du die Seite verlässt.</p>

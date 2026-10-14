@@ -57,7 +57,7 @@ function App() {
           <AuthProvider>
             <Router hook={useHashLocation}>
               <SidebarProvider style={style}>
-                <div className="flex h-screen w-full">
+                <div className="flex h-screen supports-[height:100dvh]:h-[100dvh] w-full">
                   <AppSidebar />
                   <div className="flex min-w-0 flex-1 flex-col">
                     <header className="flex h-11 items-center border-b border-border px-3 md:hidden">

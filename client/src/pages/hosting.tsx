@@ -81,7 +81,7 @@ export default function Hosting() {
   return (
     <div>
       <PageHeader title="24/7 Hosting" sub="Kostenlose Cloud-Rechner, auf denen deine Bots rund um die Uhr laufen." />
-      <div className="max-w-5xl space-y-8 p-6">
+      <div className="max-w-5xl space-y-5 p-3 sm:space-y-8 sm:p-6">
         <div className="grid gap-4 md:grid-cols-3">
           {OPTIONS.map((o, i) => (
             <article key={o.name} className={`flex flex-col rounded-lg border bg-card p-4 ${i === 0 ? "border-primary/50" : "border-card-border"}`} data-testid={`card-host-${i}`}>

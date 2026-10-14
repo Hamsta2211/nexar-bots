@@ -88,7 +88,7 @@ export default function Jobs() {
       <PageHeader title="Aufgaben" sub="Aufträge laufen auf dem Server im Hintergrund. Mehrere Agenten pro Aufgabe, jeder mit eigenen Chats.">
         <Button size="sm" onClick={() => setOpen(true)} data-testid="button-new-job"><Plus className="mr-1.5 h-4 w-4" />Neue Aufgabe</Button>
       </PageHeader>
-      <div className="space-y-4 p-6">
+      <div className="space-y-4 p-3 sm:p-6">
         <div className="flex gap-2 text-sm">
           <button className={`rounded-md border px-3 py-1 ${!showDone ? "border-primary/50 bg-primary/5" : "border-border text-muted-foreground"}`} onClick={() => setShowDone(false)}>Offen</button>
           <button className={`rounded-md border px-3 py-1 ${showDone ? "border-primary/50 bg-primary/5" : "border-border text-muted-foreground"}`} onClick={() => setShowDone(true)}>Erledigt</button>

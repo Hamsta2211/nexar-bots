@@ -225,7 +225,7 @@ export default function Bots() {
           <Plus className="mr-1 h-4 w-4" />Neuer Bot
         </Button>
       </PageHeader>
-      <div className="grid gap-4 p-6 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3 p-3 sm:gap-4 sm:p-6 md:grid-cols-2 xl:grid-cols-3">
         {isLoading && [0, 1, 2].map((i) => <Skeleton key={i} className="h-44" />)}
         {bots?.map((b) => {
           const t: string[] = JSON.parse(b.tools || "[]");

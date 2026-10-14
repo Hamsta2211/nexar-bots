@@ -188,7 +188,7 @@ export default function Security() {
       <PageHeader title="Sicherheit" sub={`Angemeldet als ${me.email}`}>
         <Button variant="outline" size="sm" onClick={logout} data-testid="button-logout-page"><LogOut className="mr-1.5 h-4 w-4" />Abmelden</Button>
       </PageHeader>
-      <div className="max-w-4xl space-y-6 p-6">
+      <div className="max-w-4xl space-y-4 p-3 sm:space-y-6 sm:p-6">
         {me.https === false && (
           <div className="flex gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4 text-sm" data-testid="warning-no-https">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />

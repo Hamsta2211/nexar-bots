@@ -41,7 +41,7 @@ export default function Dashboard() {
         <Link href="/bots"><Button size="sm" data-testid="button-new-bot">Neuer Bot</Button></Link>
       </PageHeader>
 
-      <div className="space-y-6 p-6">
+      <div className="space-y-4 p-3 sm:space-y-6 sm:p-6">
         <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-5">
           {kpis.map((k) => (
             <div key={k.label} className="bg-card px-4 py-4">
@@ -65,7 +65,7 @@ export default function Dashboard() {
           )}
         </section>
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_22rem]">
+        <div className="grid gap-4 sm:gap-6 lg:grid-cols-[1fr_22rem]">
           <section className="rounded-lg border border-card-border bg-card">
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold">Letzte Aktivität</h2>

@@ -152,7 +152,7 @@ export default function Settings() {
   return (
     <div>
       <PageHeader title="API-Keys" sub="Bring your own key: Nexar nutzt ausschließlich deine eigenen Keys." />
-      <div className="max-w-3xl space-y-4 p-6">
+      <div className="max-w-3xl space-y-3 p-3 sm:space-y-4 sm:p-6">
         <div className="flex gap-3 rounded-lg border border-border p-4 text-sm text-muted-foreground">
           <Repeat className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
           <p>
