@@ -28,11 +28,12 @@ export type SshConfig = {
   privateKey: string;
   passphrase: string;
   password: string;
+  sudoPassword: string;
   safeMode: boolean;
 };
 
 const DEFAULTS: SshConfig = {
-  host: "", port: 22, username: "", authType: "key", privateKey: "", passphrase: "", password: "", safeMode: true,
+  host: "", port: 22, username: "", authType: "key", privateKey: "", passphrase: "", password: "", sudoPassword: "", safeMode: true,
 };
 
 export function getSshConfig(): SshConfig {
@@ -57,14 +58,19 @@ export function saveSshConfig(patch: Partial<SshConfig>) {
 
 export function clearSshSecrets() {
   const cur = getSshConfig();
-  storage.setSetting("ssh_config", JSON.stringify({ ...cur, privateKey: "", passphrase: "", password: "" }));
+  storage.setSetting("ssh_config", JSON.stringify({ ...cur, privateKey: "", passphrase: "", password: "", sudoPassword: "" }));
+}
+
+export function clearSudoPassword() {
+  const cur = getSshConfig();
+  storage.setSetting("ssh_config", JSON.stringify({ ...cur, sudoPassword: "" }));
 }
 
 export function publicSshConfig() {
   const c = getSshConfig();
   return {
     host: c.host, port: c.port, username: c.username, authType: c.authType, safeMode: c.safeMode,
-    hasKey: !!c.privateKey, hasPassword: !!c.password, hasPassphrase: !!c.passphrase,
+    hasKey: !!c.privateKey, hasPassword: !!c.password, hasPassphrase: !!c.passphrase, hasSudoPassword: !!c.sudoPassword,
     configured: !!(c.host && c.username && (c.privateKey || c.password)),
     hostKey: storage.getSetting("ssh_hostkey") || "",
     publicKey: storage.getSetting("ssh_pubkey") || "",
@@ -91,7 +97,7 @@ export function checkCommand(cmd: string, safeMode: boolean) {
 
 export type ExecResult = { stdout: string; stderr: string; code: number | null; durationMs: number };
 
-export function sshExec(command: string, opts: { timeoutMs?: number; bypassSafe?: boolean } = {}): Promise<ExecResult> {
+export function sshExec(command: string, opts: { timeoutMs?: number; bypassSafe?: boolean; stdin?: string } = {}): Promise<ExecResult> {
   const c = getSshConfig();
   if (!c.host || !c.username) return Promise.reject(new Error("Kein PC verbunden. Richte die SSH-Verbindung unter \"Mein PC\" ein."));
   if (!opts.bypassSafe) checkCommand(command, c.safeMode);
@@ -153,6 +159,7 @@ export function sshExec(command: string, opts: { timeoutMs?: number; bypassSafe?
               .on("close", (code: number) => finish(null, code ?? null))
               .on("data", (d: Buffer) => { stdout += d.toString(); if (stdout.length > 200_000) stdout = stdout.slice(-200_000); })
               .stderr.on("data", (d: Buffer) => { stderr += d.toString(); if (stderr.length > 50_000) stderr = stderr.slice(-50_000); });
+            if (opts.stdin !== undefined) stream.end(opts.stdin);
           });
         })
         .on("error", (e) => finish(new Error(`SSH-Fehler: ${e.message}`)))

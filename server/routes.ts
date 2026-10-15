@@ -29,6 +29,7 @@ import {
   saveSshConfig,
   publicSshConfig,
   clearSshSecrets,
+  clearSudoPassword,
   sshExec,
   systemInfo,
   generateKey,
@@ -378,9 +379,14 @@ export async function registerRoutes(
       patch.privateKey = b.privateKey.trim() ? b.privateKey.trim() + "\n" : "";
     if (typeof b.passphrase === "string") patch.passphrase = b.passphrase;
     if (typeof b.password === "string") patch.password = b.password;
+    if (typeof b.sudoPassword === "string" && b.sudoPassword.trim()) {
+      if (b.sudoPassword.length > 256 || /[\r\n\0]/.test(b.sudoPassword)) return res.status(400).json({ message: "sudo-Passwort darf höchstens 256 Zeichen enthalten und keine Zeilenumbrüche." });
+      patch.sudoPassword = b.sudoPassword;
+    }
     if (typeof b.safeMode === "boolean") patch.safeMode = b.safeMode;
     if (patch.privateKey) await storage.setSetting("ssh_pubkey", "");
     saveSshConfig(patch);
+    if (b.clearSudoPassword === true) clearSudoPassword();
     res.json(publicSshConfig());
   });
   app.delete("/api/ssh", async (_req, res) => {
@@ -507,6 +513,7 @@ export async function registerRoutes(
       const r = await runAgent(bot, history, {
         summary: sum?.text,
         signal: ctrl.signal,
+        allowTaskTools: true,
         onCompact: (text, covered) => {
           const upto = covered > 0 ? all[covered - 1].id : sum?.upto || 0;
           summaryWrite = storage.setSetting(

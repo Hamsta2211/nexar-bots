@@ -225,8 +225,8 @@ export default function Tasks() {
         <Button role="tab" aria-selected={activeTab === "automations"} variant="ghost" className={`rounded-none border-b-2 ${activeTab === "automations" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={() => setActiveTab("automations")}><History className="mr-2 h-4 w-4" />Automationen</Button>
         <Button role="tab" aria-selected={activeTab === "reminders"} variant="ghost" className={`rounded-none border-b-2 ${activeTab === "reminders" ? "border-primary text-primary" : "border-transparent text-muted-foreground"}`} onClick={() => setActiveTab("reminders")}><ListTodo className="mr-2 h-4 w-4" />Erinnerungen</Button>
       </div>
-      {activeTab === "reminders" ? <div className="p-3 sm:p-6"><RemindersPanel tasks={tasks || []} /></div> : (
-      <div className="grid gap-4 p-3 sm:gap-6 sm:p-6 xl:grid-cols-[1fr_26rem]">
+      {activeTab === "reminders" ? <div className="p-2.5 sm:p-6"><RemindersPanel tasks={tasks || []} /></div> : (
+      <div className="grid min-w-0 gap-3 p-2.5 sm:gap-6 sm:p-6 xl:grid-cols-[1fr_26rem]">
         <section className="overflow-hidden rounded-lg border border-card-border bg-card">
           {isLoading ? <div className="space-y-2 p-4">{[0, 1].map((i) => <Skeleton key={i} className="h-14" />)}</div> : !tasks?.length ? (
             <div className="px-4 py-10 text-center sm:px-6 sm:py-16"><p className="text-sm font-medium">Noch keine Automationen</p><p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">Beispiel: Ein Morgen-Briefing direkt als Vollbild auf dein Android-Gerät senden.</p><Button size="sm" className="mt-4" onClick={() => setOpen(true)} disabled={!bots.length}>Automation anlegen</Button></div>

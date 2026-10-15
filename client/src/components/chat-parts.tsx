@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Brain, ChevronRight, Copy, Download, Eye, FileCode2, Repeat, Wrench, Loader2 } from "lucide-react";
+import { Brain, ChevronRight, Copy, Download, Eye, FileCode2, Repeat, Wrench, Loader2, ShieldAlert, Check, X } from "lucide-react";
 import type { ToolStep } from "@shared/schema";
 import { extractArtifacts, type PcArtifact } from "@shared/artifacts";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 
 export type LiveItem =
   | { kind: "think"; text: string; done: boolean }
+  | { kind: "approval"; id: string; command: string; reason: string; status: "pending" | "approved" | "denied" }
   | { kind: "tool"; step: { tool: string; args: any; result: string } };
 
 const short = (s: string, n: number) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > n ? t.slice(0, n - 1) + "…" : t; };
@@ -53,12 +54,36 @@ function ToolRow({ s }: { s: { tool: string; args: any; result: string } }) {
   );
 }
 
+export function SudoApprovalCard({ approval, onDecision }: { approval: Extract<LiveItem, { kind: "approval" }>; onDecision: (id: string, approved: boolean) => void }) {
+  const done = approval.status !== "pending";
+  return (
+    <section className="min-w-0 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm" aria-live="polite" data-testid="sudo-approval-card">
+      <div className="flex items-start gap-2">
+        <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold">sudo-Freigabe erforderlich</h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{approval.reason}</p>
+          <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all rounded-md border border-border bg-background/80 p-2 font-mono text-xs">{approval.command}</pre>
+          {done ? <p className="mt-2 flex items-center gap-1.5 text-xs font-medium" data-testid="text-sudo-decision">
+            {approval.status === "approved" ? <><Check className="h-3.5 w-3.5" />Freigegeben – dieser Befehl wird ausgeführt.</> : <><X className="h-3.5 w-3.5" />Abgelehnt – der Befehl wird nicht ausgeführt.</>}
+          </p> : <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => onDecision(approval.id, true)} data-testid="button-sudo-allow">Erlauben</Button>
+            <Button size="sm" variant="outline" onClick={() => onDecision(approval.id, false)} data-testid="button-sudo-deny">Ablehnen</Button>
+            <span className="self-center text-[11px] text-muted-foreground">Ohne Entscheidung läuft der Antrag nach 60 Sekunden ab.</span>
+          </div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /** Gedanken und Werkzeugaufrufe in der Reihenfolge, in der sie passiert sind. */
-export const Timeline = memo(function Timeline({ steps, live }: { steps: (ToolStep | LiveItem)[]; live?: boolean }) {
+export const Timeline = memo(function Timeline({ steps, live, onSudoDecision }: { steps: (ToolStep | LiveItem)[]; live?: boolean; onSudoDecision?: (id: string, approved: boolean) => void }) {
   const items = useMemo(() => {
-    const out: ({ kind: "think"; text: string; done: boolean } | { kind: "tool"; step: any } | { kind: "note"; text: string })[] = [];
+    const out: ({ kind: "think"; text: string; done: boolean } | { kind: "approval"; approval: Extract<LiveItem, { kind: "approval" }> } | { kind: "tool"; step: any } | { kind: "note"; text: string })[] = [];
     for (const s of steps as any[]) {
       if (s.kind === "tool" && s.step?.tool === "nexar") out.push({ kind: "note", text: String(s.step.result || "") });
+      else if (s.kind === "approval") out.push({ kind: "approval", approval: s });
       else if (s.kind) out.push(s);
       else if (s.tool === "denken") out.push({ kind: "think", text: String(s.result || ""), done: true });
       else if (s.tool === "nexar") out.push({ kind: "note", text: String(s.result || "") });
@@ -70,7 +95,7 @@ export const Timeline = memo(function Timeline({ steps, live }: { steps: (ToolSt
   if (!items.length) return null;
   const notes = Array.from(new Set(items.filter((i) => i.kind === "note").map((i: any) => i.text)));
   const rest = items.filter((i) => i.kind !== "note");
-  const nThink = rest.filter((i) => i.kind === "think").length, nTool = rest.length - nThink;
+  const nThink = rest.filter((i) => i.kind === "think").length, nTool = rest.filter((i) => i.kind === "tool").length;
   let ti = 0;
   return (
     <div className="mb-2 space-y-1.5" data-testid="timeline">
@@ -90,7 +115,9 @@ export const Timeline = memo(function Timeline({ steps, live }: { steps: (ToolSt
       )}
       {(live || all) && (
         <div className="space-y-1.5">
-          {rest.map((it: any, i) => it.kind === "think"
+          {rest.map((it: any, i) => it.kind === "approval"
+            ? <SudoApprovalCard key={it.approval.id} approval={it.approval} onDecision={onSudoDecision || (() => {})} />
+            : it.kind === "think"
             ? <ThinkBlock key={i} text={it.text} index={++ti} live={live && !it.done} />
             : <ToolRow key={i} s={it.step} />)}
         </div>

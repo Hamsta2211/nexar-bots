@@ -8,6 +8,9 @@ export type StreamHandlers = {
   onThink?: (text: string) => void;
   onThinkEnd?: () => void;
   onStep?: (step: { tool: string; args: any; result: string }) => void;
+  onSudoApproval?: (approval: { id: string; command: string; reason: string; expiresInMs: number }) => void;
+  onSudoExpired?: (id: string) => void;
+  onVoiceReply?: (reply: { text: string; speech: string }) => void;
   onDone?: (message: any, extra: { expect: boolean }) => void;
   onError?: (message: string) => void;
 };
@@ -54,6 +57,9 @@ export async function streamChat(
         case "think": h.onThink?.(ev.t); break;
         case "think_end": h.onThinkEnd?.(); break;
         case "step": h.onStep?.(ev.step); break;
+        case "sudo_approval": h.onSudoApproval?.({ id: String(ev.id), command: String(ev.command), reason: String(ev.reason), expiresInMs: Number(ev.expiresInMs) || 60_000 }); break;
+        case "sudo_approval_expired": h.onSudoExpired?.(String(ev.id)); break;
+        case "voice_reply": h.onVoiceReply?.({ text: String(ev.text || ""), speech: String(ev.speech || "") }); break;
         case "done": h.onDone?.(ev.message, { expect: !!ev.expect }); break;
         case "error": h.onError?.(String(ev.error || "Fehler")); break;
       }

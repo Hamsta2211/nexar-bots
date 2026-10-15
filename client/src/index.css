@@ -203,6 +203,13 @@
   }
 }
 
+/* Auf schmalen Displays etwas mehr Nutzfläche; Formulare bleiben iOS-zoomfrei und gut lesbar. */
+@media (max-width: 640px) {
+  html { font-size: 15px; }
+  body { overflow-x: hidden; }
+  input, textarea, select { font-size: max(16px, 1em); }
+}
+
 /**
  * Using the elevate system.
  * Automatic contrast adjustment.

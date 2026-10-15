@@ -17,7 +17,7 @@ import { RemoteTerminal } from "@/components/remote-terminal";
 
 type SshPublic = {
   host: string; port: number; username: string; authType: "key" | "password"; safeMode: boolean;
-  hasKey: boolean; hasPassword: boolean; hasPassphrase: boolean; configured: boolean;
+  hasKey: boolean; hasPassword: boolean; hasPassphrase: boolean; hasSudoPassword: boolean; configured: boolean;
   hostKey: string; publicKey: string;
 };
 type Info = Record<string, string>;
@@ -72,6 +72,7 @@ export default function MyPc() {
   const [privateKey, setPrivateKey] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [password, setPassword] = useState("");
+  const [sudoPassword, setSudoPassword] = useState("");
 
   useEffect(() => {
     if (!cfg) return;
@@ -102,6 +103,16 @@ export default function MyPc() {
     mutationFn: (safeMode: boolean) => apiRequest("PUT", "/api/ssh", { safeMode }),
     onSuccess: refreshAll,
   });
+  const saveSudoPassword = useMutation({
+    mutationFn: () => apiRequest("PUT", "/api/ssh", { sudoPassword }),
+    onSuccess: () => { setSudoPassword(""); refreshAll(); toast({ title: "sudo-Passwort verschlüsselt gespeichert" }); },
+    onError: (e: Error) => toast({ title: "Speichern fehlgeschlagen", description: e.message, variant: "destructive" }),
+  });
+  const clearSavedSudoPassword = useMutation({
+    mutationFn: () => apiRequest("PUT", "/api/ssh", { clearSudoPassword: true }),
+    onSuccess: () => { setSudoPassword(""); refreshAll(); toast({ title: "sudo-Passwort gelöscht" }); },
+    onError: (e: Error) => toast({ title: "Löschen fehlgeschlagen", description: e.message, variant: "destructive" }),
+  });
   const resetHost = useMutation({ mutationFn: () => apiRequest("DELETE", "/api/ssh/hostkey"), onSuccess: refreshAll });
   const forget = useMutation({ mutationFn: () => apiRequest("DELETE", "/api/ssh"), onSuccess: () => { refreshAll(); toast({ title: "Zugangsdaten gelöscht" }); } });
 
@@ -121,7 +132,7 @@ export default function MyPc() {
         )}
       </PageHeader>
 
-      <div className="space-y-4 p-3 sm:space-y-6 sm:p-6">
+      <div className="space-y-3 p-2.5 sm:space-y-6 sm:p-6">
         <div className="grid gap-4 sm:gap-6 xl:grid-cols-[24rem_1fr]">
           {/* Verbindung */}
           <div className={`space-y-4 sm:space-y-6 ${cfg?.configured ? "order-2 xl:order-1" : "order-1"}`}>
@@ -203,6 +214,16 @@ export default function MyPc() {
                 </div>
                 <Switch checked={cfg?.safeMode ?? true} onCheckedChange={(v) => safe.mutate(v)} data-testid="switch-safe-mode" />
               </label>
+              <div className="border-t border-border pt-3">
+                <Label htmlFor="ssh-sudo-password">sudo-Passwort für Agenten</Label>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Wird verschlüsselt auf dem Server gespeichert und nur nach deiner ausdrücklichen Freigabe im Chat verwendet. Der Agent muss bei jedem sudo-Befehl erklären, warum er ihn braucht.</p>
+                <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                  <Input id="ssh-sudo-password" type="password" autoComplete="new-password" value={sudoPassword} onChange={(e) => setSudoPassword(e.target.value)} placeholder={cfg?.hasSudoPassword ? "Gespeichert – zum Ersetzen neu eingeben" : "sudo-Passwort eingeben"} data-testid="input-ssh-sudo-password" />
+                  <Button variant="outline" disabled={!sudoPassword || saveSudoPassword.isPending} onClick={() => saveSudoPassword.mutate()} data-testid="button-save-sudo-password">{saveSudoPassword.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Speichern"}</Button>
+                  {cfg?.hasSudoPassword && <Button variant="ghost" disabled={clearSavedSudoPassword.isPending} onClick={() => clearSavedSudoPassword.mutate()} data-testid="button-clear-sudo-password">Löschen</Button>}
+                </div>
+                {!cfg?.hasSudoPassword && <p className="mt-1 text-[11px] text-muted-foreground">Ohne gespeichertes Passwort werden sudo-Aufrufe sicher abgelehnt.</p>}
+              </div>
               {cfg?.hostKey && (
                 <div className="border-t border-border pt-3">
                   <div className="text-xs text-muted-foreground">Gemerkter Host-Fingerabdruck</div>
@@ -245,7 +266,7 @@ export default function MyPc() {
                       )}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-4">
+                    <div className="grid min-w-0 grid-cols-2 gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-4">
                       <Meter icon={Cpu} label="CPU-Last" value={i?.LOAD ?? "—"} sub={i ? `${i.CPUS} Kerne` : undefined} />
                       <Meter icon={MemoryStick} label="RAM" value={`${mem.used} / ${mem.total}`} pct={i ? mem.pct : undefined} />
                       <Meter icon={HardDrive} label="Disk /" value={`${disk.used} / ${disk.total}`} pct={i ? disk.pct : undefined} />
@@ -280,9 +301,8 @@ export default function MyPc() {
                     <p className="mt-1 text-muted-foreground">Host und Benutzer links eintragen, „Schlüsselpaar erzeugen“ klicken, den angezeigten Befehl auf dem PC ausführen, speichern und testen.</p>
                   </li>
                   <li>
-                    <div className="font-medium">4. Optional: sudo ohne Passwort für bestimmte Befehle</div>
-                    <p className="mt-1 text-muted-foreground">Bots arbeiten nicht interaktiv. Wenn sie z.B. Updates einspielen sollen, erlaube gezielt einzelne Befehle mit <code className="font-mono">sudo visudo -f /etc/sudoers.d/nexar</code>:</p>
-                    <div className="mt-2"><CopyLine text={`${user || "david"} ALL=(root) NOPASSWD: /usr/bin/apt update, /usr/bin/apt upgrade -y, /usr/bin/systemctl restart *`} testid="button-copy-sudoers" /></div>
+                    <div className="font-medium">4. sudo für Agenten (optional)</div>
+                    <p className="mt-1 text-muted-foreground">Trage dein sudo-Passwort oben ein. Jeder sudo-Befehl verlangt im Chat eine eigene Freigabe mit Erklärung; ohne deine Zustimmung wird nichts ausgeführt. Interaktive Skripte können vorhersehbare Antworten über die Werkzeugeingabe erhalten.</p>
                   </li>
                 </ol>
               </section>

@@ -1,4 +1,5 @@
 import type { Express } from "express";
+import { randomBytes } from "node:crypto";
 import { storage } from "./storage";
 import { runAgent } from "./agent";
 import { MarkFilter, hasExpectMark, stripExpectMark, EXPECT_MARK } from "@shared/think";
@@ -9,10 +10,27 @@ const TTS_URL = process.env.TTS_URL || `http://127.0.0.1:${process.env.TTS_PORT 
 
 const VOICE_HINT = [
   "## Sprachmodus",
-  "Deine Antwort wird laut vorgelesen. Antworte natürlich gesprochen, in kurzen, klaren Sätzen und ohne Markdown, Listen, Tabellen, Emojis oder Links.",
-  "Fasse dich kurz (meist 1 bis 3 Sätze), außer der Nutzer will ausdrücklich mehr.",
+  "Du entscheidest selbst, was der Nutzer auf dem Bildschirm lesen und was er hören soll. Schreibe zuerst außerhalb von Tags die vollständige, gut formatierte sichtbare Antwort. Hänge am Ende genau einen Block <speak>…</speak> mit nur dem kurzen Teil an, der tatsächlich vorgelesen werden soll; dieser Block wird aus Chatverlauf und Anzeige entfernt. Wenn nichts vorgelesen werden soll, gib <speak></speak> aus. Standardmäßig sprich die direkte Antwort in 1–2 natürlichen Sätzen, aber lass lange Listen, Code, Links und Details nur auf dem Bildschirm.",
+  "Der sichtbare Antwortteil darf Markdown, Listen oder Code enthalten. Sprich natürlich, in kurzen klaren Sätzen; wiederhole nicht die ganze Bildschirmantwort, wenn sie lang ist.",
   `Wenn du vom Nutzer als Nächstes eine Antwort erwartest (du hast eine Frage gestellt oder brauchst eine Auswahl/Bestätigung), hänge ganz am Ende deiner Antwort exakt ${EXPECT_MARK} an. Der Marker wird nicht vorgelesen; das System hört dann automatisch weiter zu und schickt die nächste Äußerung wieder an dich. Ohne Rückfrage hängst du nichts an.`,
 ].join("\n");
+
+function splitVoiceAnswer(src: string) {
+  const blocks = [...src.matchAll(/<speak>([\s\S]*?)<\/speak>/gi)];
+  const text = src.replace(/<speak>[\s\S]*?<\/speak>/gi, "").trim();
+  const speech = blocks.length ? blocks.map((m) => m[1].trim()).filter(Boolean).join(" ") : text;
+  return { text: text || "(keine Antwort)", speech };
+}
+
+type PendingSudo = { userId: number; resolve: (approved: boolean) => void; timer: ReturnType<typeof setTimeout> };
+const pendingSudo = new Map<string, PendingSudo>();
+const sameOrigin = (req: import("express").Request) => {
+  const origin = String(req.headers.origin || "");
+  const host = String(req.headers.host || "");
+  const forwarded = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const proto = forwarded || ((req.socket as any).encrypted ? "https" : "http");
+  return !!origin && !!host && origin === `${proto}://${host}`;
+};
 
 type ConvSummary = { upto: number; text: string };
 const getSummary = (convId: number): ConvSummary | null => {
@@ -50,6 +68,19 @@ async function ttsAlive(): Promise<boolean> {
 }
 
 export function registerStreamRoutes(app: Express) {
+  app.post("/api/sudo-approvals/:id", (req, res) => {
+    if (!req.user) return res.status(401).json({ message: "Nicht angemeldet" });
+    if (!sameOrigin(req)) return res.status(403).json({ message: "Ungültiger Ursprung" });
+    if (typeof req.body?.approved !== "boolean") return res.status(400).json({ message: "Freigabeentscheidung fehlt" });
+    const item = pendingSudo.get(String(req.params.id || ""));
+    if (!item || item.userId !== req.user.id) return res.status(404).json({ message: "Freigabe nicht mehr aktiv" });
+    pendingSudo.delete(String(req.params.id));
+    clearTimeout(item.timer);
+    item.resolve(req.body?.approved === true);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true });
+  });
+
   // ---- Streaming-Chat ----
   app.post("/api/bots/:id/chat/stream", async (req, res) => {
     const bot = await storage.getBot(Number(req.params.id));
@@ -87,12 +118,28 @@ export function registerStreamRoutes(app: Express) {
       : bot;
     const t0 = Date.now();
     let streamed = "";
-    const mark = new MarkFilter((t) => { streamed += t; send({ type: "token", t }); });
+    const mark = new MarkFilter((t) => { streamed += t; if (!voice) send({ type: "token", t }); });
     let summaryWrite: Promise<void> = Promise.resolve();
     try {
       const r = await runAgent(effBot, history, {
         summary: sum?.text,
         signal: ctrl.signal,
+        allowTaskTools: true,
+        approveSudo: async ({ command, reason }) => {
+          if (ctrl.signal.aborted || !req.user) return false;
+          const id = randomBytes(24).toString("base64url");
+          const approved = new Promise<boolean>((resolve) => {
+            const timer = setTimeout(() => { pendingSudo.delete(id); send({ type: "sudo_approval_expired", id }); resolve(false); }, 60_000);
+            pendingSudo.set(id, { userId: req.user!.id, resolve, timer });
+            ctrl.signal.addEventListener("abort", () => {
+              const item = pendingSudo.get(id);
+              if (!item) return;
+              pendingSudo.delete(id); clearTimeout(item.timer); item.resolve(false);
+            }, { once: true });
+            send({ type: "sudo_approval", id, command, reason, expiresInMs: 60_000 });
+          });
+          return approved;
+        },
         onCompact: (t, covered) => {
           const upto = covered > 0 ? all[covered - 1].id : sum?.upto || 0;
           summaryWrite = storage.setSetting(`convsum_${convId}`, JSON.stringify({ upto, text: t }));
@@ -106,7 +153,10 @@ export function registerStreamRoutes(app: Express) {
       });
       mark.end();
       const expect = voice && hasExpectMark(r.content);
-      r.content = stripExpectMark(r.content) || "(keine Antwort)";
+      const rawContent = stripExpectMark(r.content);
+      const voiceParts = voice ? splitVoiceAnswer(rawContent) : null;
+      r.content = voiceParts?.text || rawContent || "(keine Antwort)";
+      if (voice && voiceParts) send({ type: "voice_reply", text: r.content, speech: voiceParts.speech });
       await summaryWrite;
       const msg = await storage.addMessage(convId, "assistant", r.content, JSON.stringify(r.steps));
       await storage.touchConversation(convId);

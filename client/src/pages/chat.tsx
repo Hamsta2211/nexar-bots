@@ -109,6 +109,8 @@ export default function Chat() {
           return { ...s, items };
         }),
         onStep: (step) => setStream((s) => (s ? { ...s, items: [...s.items, { kind: "tool", step }] } : s)),
+        onSudoApproval: (approval) => setStream((s) => (s ? { ...s, items: [...s.items, { kind: "approval", ...approval, status: "pending" }] } : s)),
+        onSudoExpired: (id) => setStream((s) => s ? { ...s, items: s.items.map((item) => item.kind === "approval" && item.id === id ? { ...item, status: "denied" } : item) } : s),
       }, ctrl.signal);
     } catch (e: any) {
       if (!ctrl.signal.aborted) toast({ title: "Fehler", description: e?.message || String(e), variant: "destructive" });
@@ -125,6 +127,15 @@ export default function Chat() {
       setPending(null);
       setSending(false);
       if (abortRef.current === ctrl) abortRef.current = null;
+    }
+  };
+
+  const decideSudo = async (id: string, approved: boolean) => {
+    try {
+      await apiRequest("POST", `/api/sudo-approvals/${encodeURIComponent(id)}`, { approved });
+      setStream((s) => s ? { ...s, items: s.items.map((item) => item.kind === "approval" && item.id === id ? { ...item, status: approved ? "approved" : "denied" } : item) } : s);
+    } catch (e: any) {
+      toast({ title: "Freigabe nicht übermittelt", description: e?.message || "Bitte versuche es erneut.", variant: "destructive" });
     }
   };
 
@@ -226,7 +237,7 @@ export default function Chat() {
                   <div className="flex gap-3" data-testid="status-thinking">
                     <BotAvatar bot={bot} size="sm" />
                     <div className="min-w-0 flex-1">
-                      <Timeline steps={stream.items} live />
+                          <Timeline steps={stream.items} live onSudoDecision={decideSudo} />
                       {stream.text ? (
                         <div className="prose-chat text-sm">
                           <ReactMarkdown remarkPlugins={[remarkGfm]}>{stream.text}</ReactMarkdown>

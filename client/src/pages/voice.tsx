@@ -14,6 +14,7 @@ import { transcribe } from "@/lib/stt-client";
 import { FaceEditor, useFaces } from "@/components/face-editor";
 import { findAgent, speakable, takeSpeakable } from "@/lib/speech-utils";
 import { AgentFace, FaceStyles, faceFor, type FaceCfg } from "@/components/agent-face";
+import { SudoApprovalCard, type LiveItem } from "@/components/chat-parts";
 
 type VoiceInfo = {
   engine: "edge-tts" | "offline";
@@ -130,6 +131,7 @@ export default function VoicePage() {
   const [followMs, setFollowMs] = useState(readFollow);
   const [endSilenceMs, setEndSilenceMs] = useState(readEndSilence);
   const [faceBot, setFaceBot] = useState<Bot | null>(null);
+  const [sudoApproval, setSudoApproval] = useState<Extract<LiveItem, { kind: "approval" }> | null>(null);
 
   const player = useRef<TtsPlayer | null>(null);
   const micRef = useRef<MicIn | null>(null);
@@ -200,11 +202,19 @@ export default function VoicePage() {
     try {
       await streamChat(bot.id, { message: msg, conversationId: convIds.current.get(bot.id) ?? null, voice: true }, {
         onStart: (cid) => convIds.current.set(bot.id, cid),
-        onToken: (t) => { buf += t; full += t; if (!capTimer) capTimer = setTimeout(showCaption, 80); drain(false); },
+        onToken: (t) => { full += t; if (!capTimer) capTimer = setTimeout(showCaption, 80); },
         onThink: (t) => { thinkBuf = (thinkBuf + t).slice(-160); setThought(thinkBuf.replace(/\s+/g, " ").trim()); },
         onThinkEnd: () => { thinkBuf = ""; },
         onReset: () => { buf = ""; full = ""; first = true; setCaption(""); },
         onDone: (_m, ex) => { expect = ex.expect; },
+        onSudoApproval: (request) => setSudoApproval({ kind: "approval", ...request, status: "pending" }),
+        onSudoExpired: (id) => setSudoApproval((current) => current?.id === id ? { ...current, status: "denied" } : current),
+        onVoiceReply: ({ text, speech }) => {
+          full = text;
+          setCaption(text);
+          const spoken = speakable(speech);
+          if (spoken) p.enqueue(spoken, voiceOf(bot), slotOf(bot));
+        },
         onError: (m) => { failed = true; setHint(m); },
       }, ctrl.signal);
       drain(true);
@@ -219,6 +229,15 @@ export default function VoicePage() {
         const finish = () => setTimeout(() => { if (abortRef.current === ctrl) failed && !full ? cond.current?.agentFailed() : cond.current?.agentDone(expect); }, 320);
         if (p.hasPending()) idleCb.current = finish; else finish();
       }
+    }
+  };
+
+  const decideSudo = async (id: string, approved: boolean) => {
+    try {
+      await apiRequest("POST", `/api/sudo-approvals/${encodeURIComponent(id)}`, { approved });
+      setSudoApproval((current) => current?.id === id ? { ...current, status: approved ? "approved" : "denied" } : current);
+    } catch (e: any) {
+      setHint(`Freigabe nicht übermittelt: ${e?.message || e}`);
     }
   };
 
@@ -290,6 +309,7 @@ export default function VoicePage() {
     setHeard("");
     setCaption("");
     setThought("");
+    setSudoApproval(null);
   };
 
   const toggleMic = () => { const n = !micOn; setMicOn(n); micOnRef.current = n; };
@@ -366,7 +386,7 @@ export default function VoicePage() {
     <div className="flex h-full flex-col">
       <FaceStyles />
       <FaceEditor bot={faceBot} open={!!faceBot} onClose={() => setFaceBot(null)} />
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3 sm:px-6">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2 sm:gap-3 sm:px-6 sm:py-3">
         <Link href={soloId ? `/chat/${soloId}` : "/chat"}>
           <Button variant="ghost" size="icon" aria-label="Zurück" data-testid="button-voice-back"><ArrowLeft className="h-4 w-4" /></Button>
         </Link>
@@ -378,7 +398,7 @@ export default function VoicePage() {
             {soloId ? "Sprich direkt mit diesem Agenten." : "Sag den Namen eines Agenten – er antwortet „Ja“ und hört dir zu."}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => setSettingsOpen((o) => !o)} data-testid="button-voice-settings">
+        <Button variant="outline" size="sm" className="h-8 px-2 text-xs sm:h-9 sm:px-3 sm:text-sm" onClick={() => setSettingsOpen((o) => !o)} data-testid="button-voice-settings">
           <Settings2 className="mr-1.5 h-4 w-4" />Einstellungen
         </Button>
       </div>
@@ -391,6 +411,7 @@ export default function VoicePage() {
             </div>
           )}
 
+          {sudoApproval && <div className="mb-4"><SudoApprovalCard approval={sudoApproval} onDecision={decideSudo} /></div>}
           {settingsOpen && (
             <div className="mb-4 rounded-xl border border-border bg-card p-3">
               <div className="mb-1 text-sm font-medium">Agenten</div>
@@ -432,7 +453,7 @@ export default function VoicePage() {
                     </button>
                   ))}
                 </div>
-                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen im Gruppen-Chat werden nach etwa 1 Sekunde Pause geprüft.</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen werden nach etwa 0,45 Sekunden Pause geprüft; nach der Whisper-Erkennung antwortet der Agent sofort mit „Ja?“.</p>
               </div>
               {!soloId && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
@@ -440,7 +461,7 @@ export default function VoicePage() {
                   {[2000, 4000, 8000].map((ms) => (
                     <button key={ms} type="button" onClick={() => setFollow(ms)} className={`rounded-md border px-2 py-0.5 ${followMs === ms ? "border-[#6e92bd] bg-[#6e92bd]/15 text-foreground" : "border-border"}`}>{ms / 1000} s</button>
                   ))}
-                  <span className="basis-full">Wake-up: lokale VAD sammelt kurze Sprachsegmente; der Gruppen-Agentenname wird nach etwa 1 Sekunde Pause über Render an Groq Whisper geprüft. Die Mikrofonseite muss geöffnet bleiben; im Hintergrund bei geschlossener App läuft es nicht.</span>
+                  <span className="basis-full">Wake-up: lokale VAD sammelt kurze Sprachsegmente; Whisper prüft den Gruppennamen nach etwa 0,45 Sekunden Pause. Direkt nach der Erkennung sagt der Agent „Ja?“ und hört zu. Die Mikrofonseite muss geöffnet bleiben; im Hintergrund bei geschlossener App läuft es nicht.</span>
                 </div>
               )}
             </div>

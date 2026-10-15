@@ -194,7 +194,7 @@ async function writeFileOnPc(rawPath: string, content: string, executable: boole
 }
 
 // ---------- Tools ----------
-type ToolDef = { name: string; description: string; parameters: any; run: (args: any, bot: Bot) => Promise<string> };
+type ToolDef = { name: string; description: string; parameters: any; run: (args: any, bot: Bot, opts?: RunOpts) => Promise<string> };
 
 const stripHtml = (html: string) =>
   html
@@ -297,18 +297,38 @@ const TOOLBOX: Partial<Record<ToolId, ToolDef[]>> = {
   }],
   linux_pc: [{
     name: "run_on_my_pc",
-    description: "Führt einen Shell-Befehl per SSH auf dem Ubuntu-PC des Nutzers aus und liefert stdout, stderr und Exit-Code. Nutze nicht-interaktive Befehle (z.B. 'apt list --upgradable', 'ls -la ~', 'df -h', 'systemctl status nginx --no-pager'). Kein sudo mit Passwortabfrage. Erkläre vor riskanten Änderungen kurz, was du tust.",
+    description: "Führt einen Shell-Befehl per SSH auf dem Ubuntu-PC des Nutzers aus und liefert stdout, stderr und Exit-Code. Nutze --yes/-y bei Installationen und nichtinteraktive Befehle, wo sinnvoll. Für JEDEN Befehl mit sudo ist ein nichtleeres Feld reason Pflicht: Erkläre konkret, welche Änderung nötig ist, warum sie nötig ist und was auf dem PC geändert wird. Das System fragt den Nutzer jedes Mal separat; führe sudo nur aus, wenn die Freigabe ausdrücklich erteilt wurde. Kein Freigabe-Caching. Nutze stdin für vorhersehbare Eingaben interaktiver Skripte; Werte aus der Ausgabe werden zurückgegeben.",
     parameters: {
       type: "object",
       properties: {
         command: { type: "string", description: "Bash-Befehl" },
+        reason: { type: "string", description: "Pflicht bei sudo: konkrete, nutzerverständliche Begründung für genau diesen privilegierten Befehl" },
+        stdin: { type: "string", description: "Optionale Eingabe für das gestartete Kommando, z.B. Antworten auf vorhersehbare Skriptfragen (maximal 8000 Zeichen)" },
         timeout_seconds: { type: "number", description: "Optional, Standard 60, max 600" },
       },
       required: ["command"],
     },
-    run: async ({ command, timeout_seconds }) => {
+    run: async ({ command, reason, stdin, timeout_seconds }, _bot, opts) => {
       const t = Math.min(Math.max(Number(timeout_seconds) || 60, 5), 600) * 1000;
-      const r = await sshExec(String(command), { timeoutMs: t });
+      const rawCommand = String(command).trim();
+      const hasSudo = /\bsudo\b/.test(rawCommand);
+      const sudoCount = (rawCommand.match(/\bsudo\b/g) || []).length;
+      let actualCommand = rawCommand;
+      let input = typeof stdin === "string" ? stdin.slice(0, 8000) : undefined;
+      if (hasSudo) {
+        if (sudoCount !== 1) return "SUDO NICHT AUSGEFÜHRT: Bitte führe immer nur einen sudo-Aufruf pro Werkzeugaufruf aus. Teile mehrere sudo-Befehle auf; jeder bekommt eine eigene Begründung und Freigabe.";
+        const config = getSshConfig();
+        if (!config.sudoPassword) return "SUDO NICHT AUSGEFÜHRT: Unter „Mein PC“ ist noch kein sudo-Passwort gespeichert.";
+        const why = String(reason || "").trim().slice(0, 1000);
+        if (!why) return "SUDO NICHT AUSGEFÜHRT: Erkläre zuerst konkret, warum genau dieser privilegierte Befehl nötig ist.";
+        if (!opts?.approveSudo) return "SUDO NICHT AUSGEFÜHRT: Für diesen Aufruf ist keine aktive Nutzerfreigabe verfügbar. Hintergrundläufe dürfen kein sudo ausführen.";
+        const approved = await opts.approveSudo({ command: rawCommand, reason: why });
+        if (!approved) return "SUDO ABGELEHNT ODER ABGELAUFEN: Der Befehl wurde nicht ausgeführt.";
+        // sudo -S liest das Passwort aus stdin; es wird weder in Befehlsargumente noch in die Logs geschrieben.
+        actualCommand = rawCommand.replace(/\bsudo\b/g, "sudo -S -p ''");
+        input = `${config.sudoPassword}\n${input || ""}`;
+      }
+      const r = await sshExec(actualCommand, { timeoutMs: t, stdin: input });
       const out = [`exit=${r.code}`, r.stdout && `stdout:\n${r.stdout.slice(-6000)}`, r.stderr && `stderr:\n${r.stderr.slice(-2000)}`].filter(Boolean).join("\n");
       return out;
     },
@@ -347,6 +367,28 @@ const TOOLBOX: Partial<Record<ToolId, ToolDef[]>> = {
     },
   ],
 };
+
+const TASK_TOOLS: ToolDef[] = [
+  {
+    name: "create_subtask",
+    description: "Speichert sofort einen größeren, mehrstufigen Arbeitsauftrag in Nexar-Bots und startet ihn im Hintergrund mit dir als zuständigem Agenten. Nutze dieses Werkzeug automatisch für umfangreiche Erstellungs-/Implementierungswünsche (z.B. ein Spiel, eine App oder ein größeres Skript), statt nur einen Plan zu versprechen. Gib einen klaren Titel, eine präzise Beschreibung und die erste konkrete Arbeitsanweisung an. Der Auftrag erscheint unter „Aufgaben“ und läuft weiter, wenn der Chat geschlossen wird.",
+    parameters: { type: "object", properties: { title: { type: "string" }, description: { type: "string" }, first_instruction: { type: "string" } }, required: ["title", "description", "first_instruction"] },
+    run: async ({ title, description, first_instruction }, bot) => {
+      const { createAgentJob } = await import("./jobs");
+      const job = await createAgentJob(bot.id, String(title), String(description || ""), String(first_instruction));
+      return `Auftrag #${job.id} „${job.title}“ wurde gespeichert und sofort gestartet. Zuständig: ${bot.name}. Fortschritt: /jobs/${job.id}.`;
+    },
+  },
+  {
+    name: "get_subtask_status",
+    description: "Liefert den aktuellen Live-Fortschritt eines gespeicherten Auftrags. Nutze es, wenn der Nutzer nach Stand, Fortschritt oder Ergebnis eines früheren Auftrags fragt. Wenn keine ID bekannt ist, lass job_id weg, um die letzten Aufträge abzurufen.",
+    parameters: { type: "object", properties: { job_id: { type: "integer", description: "Auftrags-ID, optional" } } },
+    run: async ({ job_id }) => {
+      const { getAgentJobStatus } = await import("./jobs");
+      return getAgentJobStatus(Number(job_id) > 0 ? Number(job_id) : undefined);
+    },
+  },
+];
 
 async function phoneBridge(action: string, payload: Record<string, unknown> = {}) {
   const base = process.env.KDE_CONNECT_BRIDGE_URL?.replace(/\/$/, "");
@@ -406,6 +448,8 @@ export type RunOpts = {
   summary?: string;                                        // gespeicherte Zusammenfassung älterer Nachrichten
   onCompact?: (summary: string, coveredHistory: number) => void; // wie viele History-Nachrichten jetzt in der Zusammenfassung stecken
   signal?: AbortSignal;
+  approveSudo?: (request: { command: string; reason: string }) => Promise<boolean>;
+  allowTaskTools?: boolean;
   systemAddendum?: string;                                 // nicht vom Nutzer veränderbare Laufzeitregeln, z.B. Ausgabevertrag
   onEvent?: (text: string) => void;
   onToken?: (text: string) => void;                        // wenn gesetzt: Antwort wird live gestreamt
@@ -497,17 +541,34 @@ const THINK_HINT = [
   "Alles außerhalb der <denken>-Tags ist die Antwort an den Nutzer. Der Nutzer sieht deine Überlegungen nur eingeklappt. Werkzeugaufrufe gehören nie in die Tags; schließe jeden Block mit </denken>.",
 ].join("\n");
 
+const FAST_HINT = [
+  "## Schnellroute",
+  "Diese Anfrage ist kurz und unkompliziert: antworte direkt, natürlich und knapp. Keine ausführliche Planung, keine Denkblöcke und keine Werkzeuge, außer eines ist für eine korrekte Antwort wirklich nötig.",
+].join("\n");
+
+function needsDeepThinking(input: string): boolean {
+  const s = input.trim();
+  if (!s) return true;
+  if (/\b(erstelle|erstell|erstellen|mach|mache|baue|entwickle|implementier|installier|debug|reparier|analysier|recherchier|plane|vergleiche|automatisier|deploy|sudo|spiel|game|app|website|skript|projekt|mehrstufig|aufgabe|subtask|teilaufgabe)\b/i.test(s)) return true;
+  if (s.length > 180 || s.split(/\s+/).length > 24) return true;
+  return /\b(aktuell|heute|neueste|quelle|warum genau|schritt für schritt|mit mehreren|vollständig)\b/i.test(s);
+}
+
 export async function runAgent(bot: Bot, history: { role: string; content: string }[], opts: RunOpts = {}) {
   const provider = bot.provider as Provider;
   const enabled: ToolId[] = JSON.parse(bot.tools || "[]");
   const defs = enabled.flatMap((t) => t === "phone" ? [phoneTool] : (TOOLBOX[t] || []));
+  if (opts.allowTaskTools) defs.push(...TASK_TOOLS);
+  const lastRequest = [...history].reverse().find((m) => m.role === "user")?.content || "";
+  const deepRoute = needsDeepThinking(lastRequest);
   const mem = enabled.includes("memory") ? (await storage.listMemories(bot.id)).slice(0, 20) : [];
 
   const sys = [
     bot.systemPrompt || `Du bist ${bot.name}, ein hilfreicher KI-Agent.`,
     `Aktuelles Datum: ${new Date().toISOString().slice(0, 10)}.`,
     opts.systemAddendum || "",
-    THINK_HINT,
+    deepRoute ? THINK_HINT : FAST_HINT,
+    opts.allowTaskTools ? "## Aufträge und Fortschritt\nWenn der Nutzer ein größeres, mehrstufiges Ergebnis (z.B. Spiel, App oder umfangreiche Implementierung) möchte, speichere es mit create_subtask als Aufgabe und starte sofort. Sage dem Nutzer die Auftragsnummer und dass er den Live-Stand unter Aufgaben oder hier im Chat abfragen kann. Wenn nach Fortschritt gefragt wird, rufe get_subtask_status auf; erfinde keinen Stand." : "",
     defs.length ? "Nutze deine Werkzeuge aktiv und so oft wie nötig, bis die Aufgabe wirklich erledigt ist. Antworte danach klar und knapp." : "",
     mem.length ? `Bekannte Notizen:\n${mem.map((m) => `- ${m.content}`).join("\n")}` : "",
   ].filter(Boolean).join("\n\n");
@@ -608,7 +669,7 @@ export async function runAgent(bot: Bot, history: { role: string; content: strin
       try { args = JSON.parse(call.function?.arguments || "{}"); } catch {}
       let result: string;
       try {
-        result = def ? await def.run(args, bot) : `Unbekanntes Werkzeug ${call.function?.name}`;
+        result = def ? await def.run(args, bot, opts) : `Unbekanntes Werkzeug ${call.function?.name}`;
       } catch (e: any) {
         result = `Fehler: ${e?.message || e}`;
       }

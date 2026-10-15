@@ -95,6 +95,51 @@ async function startRun(job: { id: number; title: string; description: string },
   })();
 }
 
+/** Persistiert und startet einen vom Chat-Agenten angelegten Auftrag unmittelbar im Hintergrund. */
+export async function createAgentJob(botId: number, titleInput: string, descriptionInput: string, instructionInput: string) {
+  const bot = await storage.getBot(botId);
+  if (!bot) throw new Error("Der aktuelle Agent ist nicht verfügbar.");
+  const title = String(titleInput || "").trim().slice(0, 120);
+  const description = String(descriptionInput || "").trim().slice(0, 4000);
+  const instruction = String(instructionInput || "").trim().slice(0, 4000);
+  if (!title || !instruction) throw new Error("Titel und erster Arbeitsauftrag sind erforderlich.");
+  const now = Date.now();
+  const job = mapJob((await q("insert into nb_jobs(title, description, status, created_at, updated_at) values ($1,$2,'open',$3,$3) returning *", [title, description, now]))[0]);
+  await q("insert into nb_job_agents(job_id, bot_id) values ($1,$2) on conflict do nothing", [job.id, botId]);
+  const convId = Number((await q("insert into nb_conversations(bot_id, title, updated_at, job_id) values ($1,$2,$3,$4) returning id", [botId, instruction.slice(0, 60), now, job.id]))[0].id);
+  await storage.addMessage(convId, "user", instruction);
+  await startRun(job, botId, convId, instruction);
+  return { id: job.id, title, conversationId: convId };
+}
+
+/** Liefert den letzten Arbeitsstand für einen Agenten, auch wenn der Nutzer nur „Wie läuft es?“ fragt. */
+export async function getAgentJobStatus(jobId?: number): Promise<string> {
+  const rows = jobId
+    ? await q("select * from nb_jobs where id = $1", [jobId])
+    : await q("select * from nb_jobs order by updated_at desc limit 5");
+  if (!rows.length) return "Es gibt noch keine gespeicherten Aufträge.";
+  const reports: string[] = [];
+  for (const row of rows) {
+    const job = mapJob(row);
+    const active = runningFor(job.id);
+    const latest = (await q("select id from nb_conversations where job_id = $1 order by updated_at desc limit 1", [job.id]))[0];
+    if (active.length) {
+      const run = active[0];
+      const age = Math.max(1, Math.floor((Date.now() - run.startedAt) / 1000));
+      reports.push(`Auftrag #${job.id} „${job.title}“: läuft seit ${age} s bei ${active.length} Agent(en). Letzter Text: ${(run.text || "Arbeit begonnen; noch keine Antworttokens.").slice(-900)}`);
+    } else if (latest) {
+      const messages = await storage.listMessages(Number(latest.id));
+      const last = [...messages].reverse().find((m) => m.role === "assistant");
+      const finishedRun = runs.get(Number(latest.id));
+      const state = job.status === "done" ? "als erledigt markiert" : finishedRun?.state === "error" ? "mit Fehler beendet" : finishedRun?.state === "stopped" ? "gestoppt" : finishedRun?.state === "done" ? "letzter Lauf abgeschlossen; Auftrag bleibt für weitere Arbeit offen" : "wartet/ist offen";
+      reports.push(`Auftrag #${job.id} „${job.title}“: ${state}.${last ? ` Letztes Ergebnis: ${last.content.slice(-900)}` : " Noch kein Ergebnis gespeichert."}`);
+    } else {
+      reports.push(`Auftrag #${job.id} „${job.title}“: ${job.status === "done" ? "erledigt" : "offen"}; noch kein Chat gestartet.`);
+    }
+  }
+  return reports.join("\n\n");
+}
+
 export function registerJobRoutes(app: Express) {
   // Chats von Aufgaben erscheinen nicht in der normalen Chat-Liste der Bots
   (storage as any).listConversations = async (botId: number) =>
