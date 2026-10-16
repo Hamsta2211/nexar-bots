@@ -65,10 +65,18 @@ export function findAgent(text: string, agents: { id: number; name: string }[]):
     const name = letters(a.name.split(/\s+/)[0] || "");
     if (name.length < 2) continue;
     const tol = name.length >= 8 ? 2 : name.length >= 5 ? 1 : 0;
+    // Whisper hört das deutsche/englische "Jarvis" in der Praxis häufig als Jarwis,
+    // Charvis oder Jarves. Diese Varianten sind nur Aliasse für die Ansprache,
+    // niemals Teil der an den Agenten weitergegebenen Nachricht.
+    const aliases = name === "jarvis"
+      ? ["jarvis", "jarwis", "jarwiz", "jarves", "charvis", "djarvis", "jarwies"]
+      : [name];
     for (let i = 0; i < clean.length; i++) {
       const w = clean[i];
       if (!w) continue;
-      const d = w === name || (w.startsWith(name) && w.length <= name.length + 1) ? 0 : lev(w, name);
+      const d = Math.min(...aliases.map((alias) =>
+        w === alias || (w.startsWith(alias) && w.length <= alias.length + 1) ? 0 : lev(w, alias),
+      ));
       if (d <= tol) {
         if (!best || i < best.idx || (i === best.idx && d < best.d)) best = { idx: i, id: a.id, d };
         break;

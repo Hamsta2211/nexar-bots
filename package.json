@@ -1,14 +1,19 @@
 {
   "name": "rest-express",
   "version": "1.0.0",
+  "description": "Private Nexar Bots desktop companion for Linux",
+  "author": "Nexar Bots",
   "license": "MIT",
   "type": "module",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "desktop:dev": "npm run build && electron desktop/main.cjs",
+    "desktop:linux": "npm run build && electron-builder --linux AppImage deb"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
@@ -102,6 +107,8 @@
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.31.8",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
     "esbuild": "^0.25.0",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.17",
@@ -111,6 +118,20 @@
   },
   "optionalDependencies": {
     "bufferutil": "^4.0.8"
+  },
+  "build": {
+    "appId": "im.nexarbots.desktop",
+    "productName": "Nexar Bots",
+    "files": [
+      "desktop/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    }
   },
   "overrides": {
     "drizzle-kit": {

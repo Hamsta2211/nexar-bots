@@ -15,7 +15,7 @@ async function transcribe(audio: Buffer, lang: string, hint: string) {
     fd.append("response_format", "verbose_json");
     fd.append("temperature", "0");
     if (lang) fd.append("language", lang);
-    const prompt = `Transkribiere auf Deutsch. Schreibe Agentennamen exakt: ${hint}`.slice(0, 220);
+    const prompt = `Transkribiere auf Deutsch. Das erste Wort kann ein Hotword sein. Schreibe Agentennamen exakt: ${hint}. Jarvis ist ein Name, keine Redewendung.`.slice(0, 360);
     fd.append("prompt", prompt);
 
     let res: globalThis.Response;

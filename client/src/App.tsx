@@ -62,7 +62,7 @@ function App() {
                       <SidebarTrigger data-testid="button-sidebar-toggle" />
                       <span className="ml-2 text-sm font-semibold">nexar.bots</span>
                     </header>
-                    <main className="min-h-0 flex-1 overflow-auto">
+                    <main className="min-h-0 flex-1 overflow-auto animate-page-enter">
                       <AppRouter />
                     </main>
                   </div>

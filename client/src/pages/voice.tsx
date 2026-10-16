@@ -244,7 +244,11 @@ export default function VoicePage() {
     }
   };
 
-  const hintNames = () => agentsRef.current.map((b) => b.name).join(", ");
+  const hintNames = () => agentsRef.current.flatMap((b) =>
+    b.name.toLowerCase() === "jarvis"
+      ? ["Jarvis (auch Jarwis, Jarwiz, Jarves, Charvis)"]
+      : [b.name],
+  ).join(", ");
 
   const buildConductor = () => {
     const cfg = {
@@ -418,7 +422,7 @@ export default function VoicePage() {
           {settingsOpen && (
             <div className="mb-4 rounded-xl border border-border bg-card p-3">
               <div className="mb-1 text-sm font-medium">Agenten</div>
-              <p className="mb-2 text-xs text-muted-foreground">Stimme (Microsoft) und Gesicht. Im Gruppen-Chat erkennt die Spracherkennung Agentennamen automatisch – ohne individuelles Hotword-Training.</p>
+              <p className="mb-2 text-xs text-muted-foreground">Stimme (Microsoft) und Gesicht. Im Gruppen-Chat erkennt die Spracherkennung Agentennamen automatisch. „Jarvis“ erkennt zusätzlich Jarwis, Jarwiz, Jarves und Charvis.</p>
               {agents.map((b, i) => {
                 const cur = vinfo?.assignments?.[String(b.id)] || "";
                 return (
@@ -456,7 +460,7 @@ export default function VoicePage() {
                     </button>
                   ))}
                 </div>
-                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen werden nach einer kurzen Pause geprüft; sobald Whisper den Namen erkennt, sagt der Agent ohne TTS-Netzwerkwartezeit „Ja.“ und hört zu.</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen werden nach einer kurzen Pause geprüft; der längere Vorlauf verhindert, dass die erste Silbe eines Hotwords abgeschnitten wird.</p>
               </div>
               {!soloId && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">

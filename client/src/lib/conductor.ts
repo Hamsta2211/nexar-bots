@@ -32,7 +32,7 @@ export type Cfg = {
 };
 
 export const DEFAULT_CFG: Cfg = {
-  endSilenceMs: 3000, nameEndSilenceMs: 180, followupMs: 2000, commandWaitMs: 8000, minSpeechMs: 220, maxUtteranceMs: 45_000,
+  endSilenceMs: 3000, nameEndSilenceMs: 420, followupMs: 2000, commandWaitMs: 8000, minSpeechMs: 180, maxUtteranceMs: 45_000,
   solo: false, nameFallback: false,
 };
 
@@ -128,7 +128,9 @@ export class Conductor {
     if (!c.began) {
       if (this.vad.speechRun >= 3) {
         c.began = true;
-        c.frames = this.ring.slice(-Math.ceil(400 / FRAME_MS));
+        // Genug Vorlauf behalten, damit die erste Silbe eines Hotwords nicht
+        // abgeschnitten wird (besonders auffällig bei "Jarvis").
+        c.frames = this.ring.slice(-Math.ceil(650 / FRAME_MS));
         c.startT = this.t; c.lastSpeechT = this.t; c.speechMs = 0;
       } else if (c.waitMs != null && this.t - c.startT >= c.waitMs) {
         this.fx.note(this.followup ? "" : "Keine Eingabe.");

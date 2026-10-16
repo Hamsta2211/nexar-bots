@@ -8,6 +8,7 @@ Selbst gehostete Agenten-Plattform. Du bringst deine eigenen API-Keys mit (Groq 
 - **Modell-Auswahl als Liste:** alle aktuellen Modelle live von Groq bzw. Google (mit Kontextgröße, Stabil/Vorschau, Suche, „neu“-Markierung). Die Liste aktualisiert sich automatisch (Server alle 30 Min., Oberfläche alle 2 Min. und beim Zurückkehren ins Fenster) und warnt, wenn ein Bot-Modell nicht mehr angeboten wird
 - **Werkzeuge (Function Calling):** Datum & Zeit, Rechner, Webseiten lesen, Websuche (DuckDuckGo mit Wikipedia-Fallback), Gedächtnis
 - **Chat** mit Verläufen, Markdown, sichtbaren Werkzeug-Aufrufen
+- **Erinnerungs-Startseite:** Obsidian-artige Notizkarten als Hauptmenü; darunter ein Schnellchat. Eingaben werden als normale Chats in Supabase gespeichert.
 - **Automationen:** Bots führen Aufträge nach Zeitplan aus (15 Min. bis wöchentlich), Ergebnis optional per Webhook an Discord, Slack oder eigene URL
 - **Automation-Erinnerungen:** eigener Reiter **Erinnerungen** sowie ein Erinnerungen-Button an jeder Automation zum Anlegen/Löschen; Erinnerungen erscheinen in den Automationsergebnissen und können in der gekoppelten Android-App direkt gelöscht werden.
 - **Nexar-Bots-Benachrichtigung:** eigener Automationskanal für Android mit sicherer Einmal-Kopplung, animierter Vollbildanzeige, immer sichtbarem Ausführungsdatum/-zeitpunkt, scrollbar langen Texten und schließbarer Anzeige. Der Bot liefert ein validiertes Layout mit Überschriften, Texten, Listen, Kennzahlen und wiederverwendbaren Widgets.
@@ -48,6 +49,17 @@ npm ci
 cp .env.example .env   # Werte eintragen
 npm run dev            # http://localhost:5000
 ```
+
+## Ubuntu-Desktop-App
+
+Die Desktop-App ist eine schlanke native Electron-Hülle für dieselbe Render-Instanz. Deshalb nutzt sie automatisch dieselben Anmeldedaten, Chats, Erinnerungen und Supabase-Daten wie die Website.
+
+```bash
+npm ci
+npm run desktop:linux
+```
+
+Danach liegen eine installierbare `.deb`-Datei und eine portable `.AppImage` unter `dist/`. Zum lokalen Testen der Webadresse: `NEXAR_APP_URL=https://nexar-bots.onrender.com npm run desktop:dev`.
 
 Produktion ohne Docker:
 
