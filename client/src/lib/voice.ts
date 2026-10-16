@@ -7,7 +7,7 @@ export function speechSupported(): boolean {
   return !!(w.SpeechRecognition || w.webkitSpeechRecognition);
 }
 
-type Item = { text: string; blob: Promise<string | null>; slot: number };
+type Item = { text: string; blob: Promise<string | null>; slot: number; immediate?: boolean; lang?: string };
 
 /**
  * Spielt Sprachausgabe satzweise ab: Sätze werden sofort beim Server (Python/edge-tts) angefragt,
@@ -39,6 +39,12 @@ export class TtsPlayer {
 
   enqueue(text: string, voice: string, slot = 0) {
     this.queue.push({ text, slot, blob: this.fetchAudio(text, voice) });
+    void this.pump();
+  }
+
+  /** Wake-Bestätigung ohne TTS-HTTP-Roundtrip über die lokale Browserstimme abspielen. */
+  enqueueImmediate(text: string, voice: string, slot = 0) {
+    this.queue.push({ text, slot, blob: Promise.resolve(null), immediate: true, lang: voice.split("-").slice(0, 2).join("-") || "de-DE" });
     void this.pump();
   }
 
@@ -78,11 +84,11 @@ export class TtsPlayer {
     const gen = this.gen;
     while (this.queue.length && gen === this.gen) {
       const item = this.queue.shift()!;
-      const url = await item.blob;
+      const url = item.immediate ? null : await item.blob;
       if (gen !== this.gen) { if (url) URL.revokeObjectURL(url); return; }
       if (!this.speaking) { this.speaking = true; this.onSpeaking(true); }
       if (url) await this.playUrl(url);
-      else await this.speakFallback(item.text, item.slot);
+      else await this.speakFallback(item.text, item.slot, item.lang);
     }
     if (gen !== this.gen) return;
     this.busy = false;
@@ -107,15 +113,15 @@ export class TtsPlayer {
     });
   }
 
-  private speakFallback(text: string, slot: number) {
+  private speakFallback(text: string, slot: number, lang = "de-DE") {
     return new Promise<void>((resolve) => {
       const synth = window.speechSynthesis;
       if (!synth) return resolve();
       this.usedFallback = true;
       const u = new SpeechSynthesisUtterance(text);
-      u.lang = "de-DE";
-      const de = synth.getVoices().filter((v) => v.lang.toLowerCase().startsWith("de"));
-      if (de.length) u.voice = de[slot % de.length];
+      u.lang = lang;
+      const local = synth.getVoices().filter((v) => v.lang.toLowerCase().startsWith(lang.slice(0, 2).toLowerCase()));
+      if (local.length) u.voice = local[slot % local.length];
       const done = () => { this.cancelPlay = null; resolve(); };
       u.onend = done;
       u.onerror = done;

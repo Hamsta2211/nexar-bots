@@ -167,10 +167,13 @@ export default function VoicePage() {
     p.stop();
     if (!b) return cond.current?.greetDone();
     let done = false;
-    const fin = () => { if (done) return; done = true; idleCb.current = null; setTimeout(() => cond.current?.greetDone(), 250); };
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    const fin = () => { if (done) return; done = true; if (fallbackTimer) clearTimeout(fallbackTimer); idleCb.current = null; cond.current?.greetDone(); };
     idleCb.current = fin;
-    setTimeout(fin, 7000);
-    p.enqueue("Ja?", voiceOf(b), slotOf(b));
+    const localSpeech = typeof window.speechSynthesis?.speak === "function";
+    fallbackTimer = setTimeout(fin, localSpeech ? 2500 : 8000);
+    if (localSpeech) p.enqueueImmediate("Ja.", voiceOf(b), slotOf(b));
+    else p.enqueue("Ja.", voiceOf(b), slotOf(b));
   };
 
   const ask = async (bot: Bot, msg: string) => {
@@ -453,7 +456,7 @@ export default function VoicePage() {
                     </button>
                   ))}
                 </div>
-                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen werden nach etwa 0,45 Sekunden Pause geprüft; nach der Whisper-Erkennung antwortet der Agent sofort mit „Ja?“.</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Leise Sprache wird empfindlicher erfasst. Agentennamen werden nach einer kurzen Pause geprüft; sobald Whisper den Namen erkennt, sagt der Agent ohne TTS-Netzwerkwartezeit „Ja.“ und hört zu.</p>
               </div>
               {!soloId && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
@@ -461,7 +464,7 @@ export default function VoicePage() {
                   {[2000, 4000, 8000].map((ms) => (
                     <button key={ms} type="button" onClick={() => setFollow(ms)} className={`rounded-md border px-2 py-0.5 ${followMs === ms ? "border-[#6e92bd] bg-[#6e92bd]/15 text-foreground" : "border-border"}`}>{ms / 1000} s</button>
                   ))}
-                  <span className="basis-full">Wake-up: lokale VAD sammelt kurze Sprachsegmente; Whisper prüft den Gruppennamen nach etwa 0,45 Sekunden Pause. Direkt nach der Erkennung sagt der Agent „Ja?“ und hört zu. Die Mikrofonseite muss geöffnet bleiben; im Hintergrund bei geschlossener App läuft es nicht.</span>
+                  <span className="basis-full">Wake-up: lokale VAD sammelt kurze Sprachsegmente; Whisper prüft den Gruppennamen nach einer kurzen Pause. Direkt nach der Erkennung spricht der Agent „Ja.“ über die lokale Browserstimme und hört zu. Die Mikrofonseite muss geöffnet bleiben; im Hintergrund bei geschlossener App läuft es nicht.</span>
                 </div>
               )}
             </div>

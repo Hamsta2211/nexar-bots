@@ -32,7 +32,7 @@ export type Cfg = {
 };
 
 export const DEFAULT_CFG: Cfg = {
-  endSilenceMs: 3000, nameEndSilenceMs: 450, followupMs: 2000, commandWaitMs: 8000, minSpeechMs: 220, maxUtteranceMs: 45_000,
+  endSilenceMs: 3000, nameEndSilenceMs: 180, followupMs: 2000, commandWaitMs: 8000, minSpeechMs: 220, maxUtteranceMs: 45_000,
   solo: false, nameFallback: false,
 };
 
