@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "purpose": "Jarvis standalone Python edge-tts + Vosk offline STT",
+  "generated_utc": "2026-10-17T19:49:33.743918+00:00",
+  "provenance": {
+    "vosk_model_source": "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+    "linux_source": "https://github.com/astral-sh/python-build-standalone/releases/latest",
+    "windows_source": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip"
+  },
+  "model": {
+    "url": "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+    "sha256": "b7e53c90b1f0a38456f4cd62b366ecd58803cd97cd42b06438e2c131713d5e43",
+    "bytes": 46499967,
+    "path": "resources/models/vosk-model-small-de-0.15",
+    "name": "vosk-model-small-de-0.15"
+  },
+  "linux_python": {
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.11.17%2B20261013-x86_64-unknown-linux-gnu-install_only.tar.gz",
+    "sha256": "846bf682e2b67393f2affa5e5c0994e446abc3a7cc5bb699890c36346823644c",
+    "bytes": 48930886,
+    "release": "20261013",
+    "path": "resources-linux/python",
+    "python": "3.11",
+    "asset": "cpython-3.11.17+20261013-x86_64-unknown-linux-gnu-install_only.tar.gz"
+  },
+  "windows_python": {
+    "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip",
+    "sha256": "009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b",
+    "bytes": 11249023,
+    "path": "resources-win/python",
+    "python": "3.11.9",
+    "embed": "python311._pth includes Lib/site-packages and import site"
+  },
+  "linux_tests": {
+    "imports": "pass",
+    "vosk_silent_pcm_recognizer": "pass",
+    "edge_tts_german_voice_list": "pass"
+  }
+}

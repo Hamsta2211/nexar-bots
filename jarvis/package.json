@@ -1,0 +1,113 @@
+{
+  "name": "nexar-jarvis",
+  "version": "0.2.0",
+  "description": "Jarvis Voice-Zentrale für echte ChatGPT-, Claude- und Gemini-Fenster",
+  "author": "Nexar",
+  "license": "MIT",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "dist:linux": "electron-builder --linux AppImage deb --x64",
+    "dist:win": "electron-builder --win nsis --x64",
+    "dist:all": "npm run dist:linux && npm run dist:win"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.80.0",
+    "selfsigned": "3.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "electron": "44.9.0",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "im.nexar.jarvis",
+    "productName": "Jarvis Voice",
+    "artifactName": "Jarvis-Voice-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "files": [
+      "desktop/**/*",
+      "ui/**/*",
+      "core/**/*",
+      "cloud/**/*",
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/cloud.json",
+        "to": "cloud.json"
+      },
+      {
+        "from": "resources/models",
+        "to": "models"
+      },
+      {
+        "from": "core/voice_worker.py",
+        "to": "core/voice_worker.py"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "maintainer": "Nexar",
+      "extraResources": [
+        {
+          "from": "resources-linux/python",
+          "to": "python"
+        }
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "Jarvis Voice",
+          "Comment": "Echte KI-Voice-Chats und lokale Sprachsteuerung"
+        }
+      }
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "resources-win/python",
+          "to": "python"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "directories": {
+      "output": "release"
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "playerctl",
+        "pulseaudio-utils"
+      ],
+      "compression": "gz"
+    },
+    "compression": "normal"
+  },
+  "homepage": "https://github.com/Hamsta2211/nexar-bots"
+}
