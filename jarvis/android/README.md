@@ -1,6 +1,6 @@
 # Jarvis für Android
 
-Android 8 oder neuer. Medien lokal oder am gekoppelten PC steuern, Wetter abrufen, Einstellungen synchronisieren und die offiziellen Anbieter-Apps öffnen. Voice-Sitzungen fremder Apps können nicht zuverlässig automatisch gestartet oder beendet werden. Die eigene Spracherkennung läuft nur sichtbar im Vordergrund.
+Android 8 oder neuer. Medien lokal oder am gekoppelten PC steuern, Wetter abrufen, Einstellungen synchronisieren, die offiziellen Anbieter-Apps öffnen und Jarvis-Fragen über den gekoppelten PC beantworten. Voice-Sitzungen fremder Apps können nicht zuverlässig automatisch gestartet oder beendet werden. Die eigene Spracherkennung läuft nur sichtbar im Vordergrund.
 
 ## Bauen
 
@@ -9,7 +9,7 @@ Android 8 oder neuer. Medien lokal oder am gekoppelten PC steuern, Wetter abrufe
 ./gradlew --offline assembleRelease
 ```
 
-Release-Version: 0.3.0, Versionscode 3, nicht debuggbar. Ergebnis: `app/build/outputs/apk/release/app-release.apk`.
+Release-Version: 0.4.0, Versionscode 3, nicht debuggbar. Ergebnis: `app/build/outputs/apk/release/app-release.apk`.
 
 Die Signierkonfiguration wird aus `JARVIS_SIGNING_PROPERTIES`, alternativ `android/signing.properties`, andernfalls aus `~/.local/share/jarvis-build/signing.properties` geladen. Sie enthält `storeFile`, `storePassword`, `keyAlias` und `keyPassword`. Auf diesem Build-Rechner liegen der stabile private Schlüssel und die Konfiguration unter:
 
@@ -29,3 +29,7 @@ Die Stimmliste und Vorschau verwenden den gekoppelten PC und dessen Python-edge-
 ## Prüfung
 
 Release-Build und APK-Signatur lassen sich hier prüfen. Es ist kein echtes Telefon verbunden und keine Android-Laufzeitprüfung per Emulator erfolgt. Daher sind Telefon-Mikrofon, reale Medien-Sitzungen und angemeldete Anbieter-Apps noch nicht praktisch abgenommen.
+
+## Jarvis Brain
+
+Die Android-App führt keine lokalen LLMs und verwaltet keine API-Schlüssel aus. Jarvis läuft ausschließlich über den gekoppelten PC: `GET /brain`, `GET /brain/models?provider=local|groq`, `PUT /brain`, `POST /brain/ask`, `/brain/cancel` und `/brain/reset`. Der Groq-Schlüssel wird sicher am PC hinterlegt und niemals über LAN oder Cloud an Android übertragen. Ohne PC zeigt die App eine klare Kopplungsnachricht. Antworten werden als Text angezeigt und über den bestehenden PC-`/speak`-Dienst auf Android abgespielt.

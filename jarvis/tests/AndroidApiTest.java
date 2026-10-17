@@ -6,6 +6,7 @@ import android.content.*;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import java.util.concurrent.CountDownLatch;
 import javax.net.ssl.*;
 import org.json.*;
 
@@ -14,8 +15,12 @@ public class AndroidApiTest {
   static JSONObject remote=new JSONObject();
   static JSONObject lastPatch;
   static boolean rpcFail,weatherFail,refreshInvalid,refreshOffline;
+  static boolean desktopFail;
   static int refreshes;
   static String lastAuthorization;
+  static String lastDesktopMethod,lastDesktopPath,lastDesktopBody;
+  static int lastDesktopReadTimeout,lastDesktopConnectTimeout;
+  static boolean lastDesktopRedirects;
   static Runnable duringRpc;
   static void check(boolean b,String message){if(!b)throw new AssertionError(message);}
   static String response(String path,Map<String,String> headers,String body)throws Exception{
@@ -34,14 +39,27 @@ public class AndroidApiTest {
       return remote.toString();
     }
     if(path.contains("/jarvis_profiles?")){check(path.contains("limit=1"),"bounded profile read");return new JSONArray().put(new JSONObject().put("id",UID).put("settings",remote)).toString();}
+    if(path.startsWith("https://desktop.test")){
+      lastDesktopPath=path.substring("https://desktop.test".length());
+      if(desktopFail)return "{\"message\":\"PC offline\"}";
+      if(lastDesktopPath.equals("/brain"))return new JSONObject().put("provider","local").put("localUrl","http://127.0.0.1:11434").put("localModel","llama3").put("groqModel","llama-3.1-70b").put("hasGroqKey",true).put("keyStorage","secure").put("busy",false).toString();
+      if(lastDesktopPath.startsWith("/brain/models?provider="))return new JSONArray().put(new JSONObject().put("id","llama3").put("name","Llama 3")).put(new JSONObject().put("id","mistral")).toString();
+      if(lastDesktopPath.equals("/brain/ask"))return new JSONObject().put("text","Grüße, 世界").put("provider","local").put("model","llama3").toString();
+      if(lastDesktopPath.equals("/brain")||lastDesktopPath.equals("/brain/cancel")||lastDesktopPath.equals("/brain/reset"))return "{}";
+      throw new AssertionError("Unexpected desktop request: "+lastDesktopPath);
+    }
     throw new AssertionError("Unexpected request: "+path);
   }
   static class Fake extends HttpsURLConnection {
-    Map<String,String> h=new HashMap<>();ByteArrayOutputStream out=new ByteArrayOutputStream();String result;int status;
+    Map<String,String> h=new HashMap<>();ByteArrayOutputStream out=new ByteArrayOutputStream();String result;int status;int readTimeout,connectTimeout;boolean redirects;
     Fake(URL u){super(u);}
     public void setRequestProperty(String k,String v){h.put(k,v);}
+    public void setRequestMethod(String m)throws ProtocolException{super.setRequestMethod(m);}
+    public void setReadTimeout(int n){readTimeout=n;if(url.toString().startsWith("https://desktop.test"))lastDesktopReadTimeout=n;}
+    public void setConnectTimeout(int n){connectTimeout=n;if(url.toString().startsWith("https://desktop.test"))lastDesktopConnectTimeout=n;}
+    public void setInstanceFollowRedirects(boolean b){redirects=b;if(url.toString().startsWith("https://desktop.test"))lastDesktopRedirects=b;}
     public OutputStream getOutputStream(){return out;}
-    public int getResponseCode()throws IOException{if(result==null)try{String u=url.toString();result=response(u,h,out.toString("UTF-8"));status=(u.contains("grant_type=refresh_token")?(refreshInvalid?400:503):(u.contains("/rpc/")&&rpcFail)||(u.contains("/forecast?")&&weatherFail)?503:200);}catch(Exception e){throw new IOException(e);}return status;}
+    public int getResponseCode()throws IOException{if(result==null)try{String u=url.toString();lastDesktopMethod=getRequestMethod();lastDesktopBody=out.toString("UTF-8");if(u.startsWith("https://desktop.test"))lastAuthorization=h.get("Authorization");result=response(u,h,lastDesktopBody);status=(u.startsWith("https://desktop.test")&&desktopFail)?503:(u.contains("grant_type=refresh_token")?(refreshInvalid?400:503):(u.contains("/rpc/")&&rpcFail)||(u.contains("/forecast?")&&weatherFail)?503:200);}catch(Exception e){throw new IOException(e);}return status;}
     public InputStream getInputStream()throws IOException{getResponseCode();return new ByteArrayInputStream(result.getBytes("UTF-8"));}
     public InputStream getErrorStream(){try{return getInputStream();}catch(Exception e){return null;}}
     public void connect(){}public void disconnect(){}public boolean usingProxy(){return false;}
@@ -71,7 +89,16 @@ public class AndroidApiTest {
     api.secure.put("token","desktop-test");api.secure.put("expiresAt","0");int before=refreshes;api.cloudLogout();check(refreshes==before,"logout must not refresh or recurse");check("desktop-test".equals(api.secure.get("token")),"cloud logout preserves desktop pairing");
     api.cloudLogin("test@example.invalid","not-real");api.secure.put("expiresAt","0");refreshInvalid=true;sync(api);check(api.secure.get("refreshToken").isEmpty(),"definitively invalid refresh signs out safely");refreshInvalid=false;
     api.cloudLogin("test@example.invalid","not-real");api.secure.put("expiresAt","0");api.saveLocalSettings(DesktopApi.DEFAULT_VOICE,"Wien");sync(api);check(!api.secure.get("refreshToken").isEmpty()&&p.getBoolean("settingsDirty",false),"offline refresh preserves credentials and pending edits");
-    System.out.println("ANDROID_API_HOST_TEST_PASS: access bearer, signup confirmation, atomic patches, offline retry, concurrent local edit, weather, safe logout/refresh");
+    // Desktop brain API: the fake deliberately ignores certificate pinning, but checks HTTPS routing/auth/JSON.
+    p.edit().putString("baseUrl","https://desktop.test").putString("fingerprint",String.join("",Collections.nCopies(64,"a"))).apply();api.secure.put("token","desktop-test");
+    CountDownLatch latch=new CountDownLatch(1);final DesktopApi.BrainState[] state={null};final String[] err={null};api.brainState((s,e)->{state[0]=s;err[0]=e;latch.countDown();});check(latch.await(3,java.util.concurrent.TimeUnit.SECONDS),"brain state callback timeout");check(err[0]==null&&"local".equals(state[0].provider)&&"http://127.0.0.1:11434".equals(state[0].localUrl),"brain state parse");check("GET".equals(lastDesktopMethod)&&"/brain".equals(lastDesktopPath)&&"Bearer desktop-test".equals(lastAuthorization),"brain route and bearer");check(lastDesktopReadTimeout==9000&&!lastDesktopRedirects,"normal desktop timeout and redirects disabled");
+    final CountDownLatch modelsLatch=new CountDownLatch(1);final List<DesktopApi.BrainModel>[] models=new List[]{null};err[0]=null;api.brainModels("local",(m,e)->{models[0]=m;err[0]=e;modelsLatch.countDown();});check(modelsLatch.await(3,java.util.concurrent.TimeUnit.SECONDS),"brain models callback timeout");check(err[0]==null&&models[0].size()==2&&"llama3".equals(models[0].get(0).id),"model list array");check("GET".equals(lastDesktopMethod)&&"/brain/models?provider=local".equals(lastDesktopPath),"model route");
+    final CountDownLatch saveLatch=new CountDownLatch(1);err[0]=null;api.saveBrain("groq","llama3","mixtral",e->{err[0]=e;saveLatch.countDown();});check(saveLatch.await(3,java.util.concurrent.TimeUnit.SECONDS),"save callback timeout");JSONObject save=new JSONObject(lastDesktopBody);check(err[0]==null&&"groq".equals(save.getString("provider"))&&"llama3".equals(save.getString("localModel"))&&"mixtral".equals(save.getString("groqModel"))&&!save.has("apiKey")&&!save.has("localUrl"),"save config body");check("PUT".equals(lastDesktopMethod)&&"/brain".equals(lastDesktopPath),"save route");
+    final CountDownLatch askLatch=new CountDownLatch(1);final String[] answer={null},answerProvider={null},answerModel={null};err[0]=null;api.askBrain("ÄÖÜ 世界?",(t,pr,m,e)->{answer[0]=t;answerProvider[0]=pr;answerModel[0]=m;err[0]=e;askLatch.countDown();});check(askLatch.await(3,java.util.concurrent.TimeUnit.SECONDS),"ask callback timeout");check(err[0]==null&&"Grüße, 世界".equals(answer[0])&&"local".equals(answerProvider[0])&&"llama3".equals(answerModel[0]),"unicode ask response");check(lastDesktopReadTimeout==70000&&"POST".equals(lastDesktopMethod)&&"/brain/ask".equals(lastDesktopPath),"ask timeout and route");
+    for(String op:new String[]{"cancel","reset"}){final CountDownLatch opLatch=new CountDownLatch(1);err[0]=null;if(op.equals("cancel"))api.cancelBrain(e->{err[0]=e;opLatch.countDown();});else api.resetBrain(e->{err[0]=e;opLatch.countDown();});check(opLatch.await(3,java.util.concurrent.TimeUnit.SECONDS),op+" callback timeout");check(err[0]==null&&("/brain/"+op).equals(lastDesktopPath)&&"POST".equals(lastDesktopMethod),op+" route");}
+    desktopFail=true;final CountDownLatch errorLatch=new CountDownLatch(1);err[0]=null;api.brainState((s,e)->{err[0]=e;errorLatch.countDown();});check(errorLatch.await(3,java.util.concurrent.TimeUnit.SECONDS)&&err[0]!=null&&err[0].contains("PC offline"),"desktop HTTP error");desktopFail=false;
+    p.edit().remove("baseUrl").remove("fingerprint").apply();final CountDownLatch unpairedLatch=new CountDownLatch(1);err[0]=null;api.askBrain("offline",(t,pr,m,e)->{err[0]=e;unpairedLatch.countDown();});check(unpairedLatch.await(3,java.util.concurrent.TimeUnit.SECONDS)&&err[0]!=null&&err[0].contains("bitte zuerst einen PC koppeln"),"clear PC pairing friendly message");
+    System.out.println("ANDROID_API_HOST_TEST_PASS: access bearer, signup confirmation, atomic patches, offline retry, concurrent local edit, weather, safe logout/refresh, desktop brain state/models/save/ask/cancel/reset");
   }
 }
 

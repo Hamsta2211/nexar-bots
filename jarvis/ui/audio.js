@@ -17,10 +17,11 @@
     }
   }
   class PcmPump{
-    constructor({send,onResult,onError,onOverflow,maxSamples=16000*4}){Object.assign(this,{send,onResult,onError,onOverflow,maxSamples});this.queue=[];this.samples=0;this.running=false;this.closed=false;}
+    constructor({send,onResult,onError,onOverflow,maxSamples=16000*4}){Object.assign(this,{send,onResult,onError,onOverflow,maxSamples});this.queue=[];this.samples=0;this.running=false;this.closed=false;this.generation=0;}
     push(samples){if(this.closed||!samples.length)return;const copy=new Float32Array(samples);if(this.samples+copy.length>this.maxSamples){this.queue=[];this.samples=0;this.onOverflow?.();return;}this.queue.push(copy);this.samples+=copy.length;this.drain();}
-    async drain(){if(this.running||this.closed)return;this.running=true;try{while(this.queue.length&&!this.closed){const next=this.queue.shift();this.samples-=next.length;const result=await this.send(encodePCM(next));if(!this.closed)this.onResult?.(result);}}catch(e){if(!this.closed)this.onError?.(e);}finally{this.running=false;if(this.queue.length&&!this.closed)this.drain();}}
-    close(){this.closed=true;this.queue=[];this.samples=0;}
+    async drain(){if(this.running||this.closed)return;this.running=true;try{while(this.queue.length&&!this.closed){const next=this.queue.shift();this.samples-=next.length;const generation=this.generation,result=await this.send(encodePCM(next));if(!this.closed&&generation===this.generation)this.onResult?.(result);}}catch(e){if(!this.closed)this.onError?.(e);}finally{this.running=false;if(this.queue.length&&!this.closed)this.drain();}}
+    reset(){this.generation++;this.queue=[];this.samples=0;}
+    close(){this.closed=true;this.reset();}
   }
   const api={encodePCM,Resampler,PcmPump};if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.JarvisAudio=api;
 })(globalThis);

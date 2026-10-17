@@ -7,7 +7,7 @@ const { createClient: defaultCreateClient } = require('@supabase/supabase-js');
 const PROFILE_TABLE = 'jarvis_profiles';
 const PENDING_FILE = 'cloud-settings-pending.json';
 const VOICE_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const ALLOWED_SETTINGS = Object.freeze(['voice', 'weatherCity', 'alwaysOnTop', 'wakeEnabled']);
+const ALLOWED_SETTINGS = Object.freeze(['voice', 'weatherCity', 'alwaysOnTop', 'wakeEnabled', 'brainProvider', 'localModel', 'groqModel']);
 
 function makeError(message, code = 'CLOUD_ERROR', cause) {
   const error = new Error(message);
@@ -39,6 +39,16 @@ function sanitizeSettings(input = {}) {
   for (const key of ['alwaysOnTop', 'wakeEnabled']) {
     if (input[key] !== undefined) {
       if (typeof input[key] !== 'boolean') throw makeError(`${key} must be boolean`, 'INVALID_SETTINGS');
+      output[key] = input[key];
+    }
+  }
+  if (input.brainProvider !== undefined) {
+    if (input.brainProvider !== 'local' && input.brainProvider !== 'groq') throw makeError('brainProvider must be local or groq', 'INVALID_SETTINGS');
+    output.brainProvider = input.brainProvider;
+  }
+  for (const key of ['localModel', 'groqModel']) {
+    if (input[key] !== undefined) {
+      if (typeof input[key] !== 'string' || !input[key].trim() || input[key].length > 200) throw makeError(`${key} must be a non-empty string of at most 200 characters`, 'INVALID_SETTINGS');
       output[key] = input[key];
     }
   }

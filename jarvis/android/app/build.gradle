@@ -3,5 +3,5 @@ plugins { id 'com.android.application' }
 android { namespace 'im.nexar.jarvis'; compileSdk 35
     signingConfigs { release { def props = new Properties(); def external = System.getenv("JARVIS_SIGNING_PROPERTIES"); def f = external ? file(external) : rootProject.file("signing.properties"); if (!f.exists()) f = new File(System.getProperty("user.home"), ".local/share/jarvis-build/signing.properties"); if (f.exists()) { f.withInputStream { props.load(it) }; storeFile file(props["storeFile"]); storePassword props["storePassword"]; keyAlias props["keyAlias"]; keyPassword props["keyPassword"] } } }
     buildTypes { release { minifyEnabled false; debuggable false; signingConfig signingConfigs.release } }
-    defaultConfig { applicationId 'im.nexar.jarvis'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
+    defaultConfig { applicationId 'im.nexar.jarvis'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.4.0' }
 }

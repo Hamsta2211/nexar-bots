@@ -1,5 +1,7 @@
 -- Additive migration for the Jarvis desktop/mobile settings profile.
 -- Existing project resources are intentionally not modified.
+-- Settings are validated by jarvis_merge_settings: voice, weatherCity,
+-- alwaysOnTop, wakeEnabled, brainProvider, localModel, and groqModel.
 create table if not exists public.jarvis_profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   settings jsonb not null default '{}'::jsonb,

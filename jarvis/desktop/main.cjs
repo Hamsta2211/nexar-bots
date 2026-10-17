@@ -3,8 +3,9 @@ const { app, BrowserWindow, WebContentsView, ipcMain, shell, session, safeStorag
 const fs = require('node:fs');
 const path = require('node:path');
 const { createService } = require('../core/service.cjs');
+const { createBrain } = require('../core/brain.cjs');
 const { ProviderStateController, voiceActionScript } = require('./providers.cjs');
-let main, view, service, cloud, providerId = null, shuttingDown = false, cloudSignedIn = false;
+let main, view, service, cloud, brain, providerId = null, shuttingDown = false, cloudSignedIn = false;
 const providerWindows = new Set();
 const providerController = new ProviderStateController({ emit: event => emit(event) });
 const PROVIDERS = { chatgpt: { name: 'ChatGPT', url: 'https://chatgpt.com/' }, claude: { name: 'Claude', url: 'https://claude.ai/new' }, gemini: { name: 'Gemini', url: 'https://gemini.google.com/app' } };
@@ -53,26 +54,39 @@ function startProvider(id) {
   main.show(); main.focus();
   return { provider: id, status: 'loading' };
 }
+async function invokeBrain(action, payload) {
+  const result = await brain.invoke(action, payload);
+  if (action === 'brain:configure' && cloudSignedIn && cloud) {
+    const patch = {};
+    if (payload?.provider !== undefined) patch.brainProvider = result.provider;
+    for (const key of ['localModel', 'groqModel']) if (payload?.[key] !== undefined) patch[key] = result[key];
+    if (Object.keys(patch).length) cloud.invoke('cloud:push', patch).catch(error => emit({ type: 'cloud-error', message: error.message }));
+  }
+  return result;
+}
 async function createWindow() {
   main = new BrowserWindow({ width: 1420, height: 920, minWidth: 1030, minHeight: 720, title: 'Jarvis', backgroundColor: '#0a0e15', autoHideMenuBar: true, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
   permissions(main.webContents.session, 'local', () => main?.webContents);
   main.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   main.webContents.on('will-navigate', (event, url) => { if (url !== require('node:url').pathToFileURL(LOCAL).href) event.preventDefault(); });
   main.on('resize', layout); main.on('closed', () => { main = null; });
-  service = await createService({ dataDir: path.join(app.getPath('userData'), 'core'), resourceDir, onEvent: event => { emit(event); if (event.type === 'settings' && main) main.setAlwaysOnTop(!!event.settings.alwaysOnTop); } });
+  brain = await createBrain({ dataDir: path.join(app.getPath('userData'), 'brain'), onEvent: emit, encrypt: text => secureAvailable() ? safeStorage.encryptString(text).toString('base64') : null, decrypt: text => secureAvailable() ? safeStorage.decryptString(Buffer.from(text, 'base64')) : null });
+  service = await createService({ brainInvoke: invokeBrain, dataDir: path.join(app.getPath('userData'), 'core'), resourceDir, onEvent: event => { emit(event); if (event.type === 'settings' && main) main.setAlwaysOnTop(!!event.settings.alwaysOnTop); } });
   const config = JSON.parse(fs.readFileSync(path.join(resourceDir, 'cloud.json'), 'utf8'));
   const { createCloud } = require('./cloud.cjs');
-  const cloudInvoke = createCloud({ dataDir: path.join(app.getPath('userData'), 'cloud'), config, onSettings: async settings => { const local = { ...settings }; delete local.wakeEnabled; await service.invoke('settings:set', local); }, onEvent: event => { if(event.type === 'auth') cloudSignedIn = !!event.signedIn; emit(event); }, encrypt: text => secureAvailable() ? safeStorage.encryptString(text).toString('base64') : null, decrypt: text => secureAvailable() ? safeStorage.decryptString(Buffer.from(text, 'base64')) : null });
+  const cloudInvoke = createCloud({ dataDir: path.join(app.getPath('userData'), 'cloud'), config, onSettings: async settings => { const local = Object.fromEntries(Object.entries(settings).filter(([key]) => ['voice','weatherCity','alwaysOnTop'].includes(key))); const model = {}; if (settings.brainProvider !== undefined) model.provider = settings.brainProvider; for (const key of ['localModel','groqModel']) if (settings[key] !== undefined) model[key] = settings[key]; if (Object.keys(model).length) await brain.invoke('brain:configure', model); if (Object.keys(local).length) await service.invoke('settings:set', local); }, onEvent: event => { if(event.type === 'auth') cloudSignedIn = !!event.signedIn; emit(event); }, encrypt: text => secureAvailable() ? safeStorage.encryptString(text).toString('base64') : null, decrypt: text => secureAvailable() ? safeStorage.decryptString(Buffer.from(text, 'base64')) : null });
   cloud = { invoke: cloudInvoke, close: cloudInvoke.close };
   main.setAlwaysOnTop(!!(await service.invoke('settings:get')).alwaysOnTop);
   await main.loadFile(LOCAL);
 }
 const CORE_ACTIONS = new Set(['status', 'settings:get', 'settings:set', 'weather', 'voices', 'speak', 'recognizer:pcm', 'recognizer:reset', 'media', 'pairing:enable', 'pairing:disable', 'pairing:invite', 'devices', 'device:revoke']);
+const BRAIN_ACTIONS = new Set(['brain:status','brain:configure','brain:models','brain:ask','brain:cancel','brain:reset']);
 const AUTH_ACTIONS = new Set(['auth:status', 'auth:signup', 'auth:signin', 'auth:signout']);
 const CLOUD_ACTIONS = new Set(['cloud:push', 'cloud:pull']);
 ipcMain.handle('jarvis:invoke', async (event, action, payload) => {
   if (!isLocal(event.sender) || event.senderFrame !== main.webContents.mainFrame) throw Error('Nicht berechtigt');
-  if (action === 'provider:start') return startProvider(payload?.id);
+  if (action === 'provider:start') { await brain.invoke('brain:cancel'); return startProvider(payload?.id); }
+  if (BRAIN_ACTIONS.has(action)) return invokeBrain(action, payload);
   if (action === 'provider:stop') return stopProvider();
   if (action === 'provider:visibility') { if (view) view.setVisible(payload?.visible !== false); return {}; }
   if (action === 'provider:reload') { if (view) { view.webContents.reload(); providerController.rearm(); } return {}; }
@@ -95,5 +109,5 @@ if (!single) app.quit(); else {
   app.on('second-instance', () => { if (main) { main.show(); main.focus(); } });
   app.whenReady().then(createWindow).catch(error => { console.error('Jarvis konnte nicht starten:', error.message); app.quit(); });
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', event => { if (shuttingDown) return; event.preventDefault(); shuttingDown = true; stopProvider(); Promise.allSettled([service?.close(), cloud?.close?.()]).finally(() => app.quit()); });
+  app.on('before-quit', event => { if (shuttingDown) return; event.preventDefault(); shuttingDown = true; stopProvider(); Promise.allSettled([service?.close(), cloud?.close?.(), brain?.close?.()]).finally(() => app.quit()); });
 }
