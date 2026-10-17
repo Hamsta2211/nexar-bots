@@ -1,16 +1,19 @@
 {
   "name": "nexar-jarvis",
-  "version": "0.2.0",
-  "description": "Jarvis Voice-Zentrale für echte ChatGPT-, Claude- und Gemini-Fenster",
+  "version": "0.3.0",
+  "description": "Sprachsteuerung f\u00fcr ChatGPT, Claude und Gemini",
   "author": "Nexar",
   "license": "MIT",
   "main": "desktop/main.cjs",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests/*.test.cjs",
+    "test": "node --test tests/*.test.cjs desktop/*.test.cjs",
     "dist:linux": "electron-builder --linux AppImage deb --x64",
     "dist:win": "electron-builder --win nsis --x64",
-    "dist:all": "npm run dist:linux && npm run dist:win"
+    "dist:all": "npm run dist:linux && npm run dist:win",
+    "test:desktop": "xvfb-run -a node tests/desktop-smoke.cjs",
+    "test:providers": "playwright test --config=playwright.config.cjs",
+    "test:audio": "xvfb-run -a node tests/audio-e2e.cjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.80.0",
@@ -23,8 +26,8 @@
   },
   "build": {
     "appId": "im.nexar.jarvis",
-    "productName": "Jarvis Voice",
-    "artifactName": "Jarvis-Voice-${version}-${os}-${arch}.${ext}",
+    "productName": "Jarvis",
+    "artifactName": "Jarvis-${version}-${os}-${arch}.${ext}",
     "asar": true,
     "files": [
       "desktop/**/*",
@@ -65,8 +68,8 @@
       ],
       "desktop": {
         "entry": {
-          "Name": "Jarvis Voice",
-          "Comment": "Echte KI-Voice-Chats und lokale Sprachsteuerung"
+          "Name": "Jarvis",
+          "Comment": "Sprachsteuerung"
         }
       }
     },

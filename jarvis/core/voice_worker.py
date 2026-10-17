@@ -5,19 +5,32 @@ if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stdin, "reconfigure"): sys.stdin.reconfigure(encoding="utf-8")
 parser = argparse.ArgumentParser(); parser.add_argument('--resource-dir', default='.'); args = parser.parse_args()
 MAX_PCM = 2 * 1024 * 1024
+MAX_TEXT = 10000
+MAX_VOICE = 256
+_voice_cache = None
+_voice_cache_at = 0
 
 def emit(x):
     sys.stdout.write(json.dumps(x, ensure_ascii=False) + '\n'); sys.stdout.flush()
 
 def voices():
+    global _voice_cache, _voice_cache_at
+    import time
+    if _voice_cache is not None and time.monotonic() - _voice_cache_at < 300:
+        return _voice_cache
     try:
         import edge_tts
         raw = asyncio.run(asyncio.wait_for(edge_tts.list_voices(), timeout=30))
-        return [{'ShortName': x.get('ShortName'), 'Locale': x.get('Locale'), 'Gender': x.get('Gender'), 'FriendlyName': x.get('FriendlyName')} for x in raw]
+        _voice_cache = [{'ShortName': str(x.get('ShortName') or '')[:MAX_VOICE], 'Locale': str(x.get('Locale') or '')[:32], 'Gender': str(x.get('Gender') or '')[:32], 'FriendlyName': str(x.get('FriendlyName') or '')[:256]} for x in raw[:500] if isinstance(x, dict) and x.get('ShortName')]
+        _voice_cache_at = time.monotonic()
+        return _voice_cache
     except Exception as e: raise RuntimeError(str(e))
 
 def speak(text, voice):
-    if not isinstance(text, str) or not text.strip() or len(text) > 10000: raise ValueError('text required')
+    if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT: raise ValueError('text required')
+    if not isinstance(voice, str) or not voice.strip() or len(voice) > MAX_VOICE: raise ValueError('invalid voice')
+    try: text.encode('utf-8'); voice.encode('utf-8')
+    except UnicodeError: raise ValueError('invalid UTF-8')
     async def run():
         import edge_tts
         with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f: name = f.name

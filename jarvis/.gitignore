@@ -17,3 +17,7 @@ settings.json
 devices.json
 tls-key.pem
 tls-cert.pem
+
+/test-results/
+/playwright-report/
+/release-audio-test.png

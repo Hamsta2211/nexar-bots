@@ -5,11 +5,11 @@
   <package android:name="com.openai.chatgpt" />
   <package android:name="com.anthropic.claude" />
   <package android:name="com.google.android.apps.bard" />
+  <intent><action android:name="android.speech.RecognitionService" /></intent>
  </queries>
- <application android:theme="@style/AppTheme" android:label="Jarvis Companion" android:usesCleartextTraffic="false" android:allowBackup="false">
+ <application android:theme="@style/AppTheme" android:label="Jarvis" android:usesCleartextTraffic="false" android:allowBackup="false">
   <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-   <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="im.nexar.jarvis" android:host="auth" android:path="/callback"/></intent-filter>
   </activity>
  </application>
 </manifest>
